@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Peacekeeper Fleet Agent</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101214;
+      --panel: #181c20;
+      --panel-2: #20262c;
+      --text: #eef2f4;
+      --muted: #9aa6ad;
+      --accent: #35c48f;
+      --danger: #ff5a5f;
+      --warn: #f3b33d;
+      --line: #303941;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #13171a;
+    }
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 650;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 380px;
+      gap: 14px;
+      padding: 14px;
+      height: calc(100vh - 58px);
+    }
+    .video-wrap {
+      min-height: 0;
+      background: #000;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      position: relative;
+    }
+    .video-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      background: #000;
+    }
+    .sample-placeholder {
+      height: 100%;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 14px;
+      background: #050607;
+    }
+    .hud {
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      padding: 8px 10px;
+      background: rgba(0,0,0,.55);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    aside {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+      overflow: auto;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 650;
+      text-transform: uppercase;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover { border-color: #55636e; }
+    button.primary { background: #1c5f49; border-color: #2b8769; }
+    button.warn { background: #5f451b; border-color: #8c6627; }
+    button.danger { background: #6c2226; border-color: #9f343a; }
+    .wide { grid-column: 1 / -1; }
+    label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    input[type="range"] { width: 100%; }
+    input[type="text"] {
+      width: 100%;
+      min-height: 36px;
+      padding: 7px 9px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--text);
+    }
+    pre {
+      margin: 0;
+      max-height: 280px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #c9d1d8;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .status-dot {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      border-radius: 99px;
+      background: var(--warn);
+      margin-right: 8px;
+    }
+    .online { background: var(--accent); }
+    .offline { background: var(--danger); }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; height: auto; }
+      .video-wrap { height: 55vh; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Peacekeeper Fleet Agent</h1>
+    <div><span id="ws-dot" class="status-dot offline"></span><span id="mode">DISCONNECTED</span></div>
+    </header>
+  <main>
+    <div class="video-wrap">
+      <div id="samplePlaceholder" class="sample-placeholder">No camera sample</div>
+      <img id="sampleFrame" alt="Camera sample" hidden>
+      <div class="hud">
+        <div>Run: {{ run_id }}</div>
+        <div id="sampleTime">Sample: never</div>
+      </div>
+    </div>
+    <aside>
+      <section>
+        <h2>Manual Control</h2>
+        <label>Speed <input id="speed" type="range" min="0.05" max="0.45" step="0.01" value="0.2"><span id="speedValue">0.20</span></label>
+        <div class="grid" style="margin-top: 10px;">
+          <button></button>
+          <button data-dir="forward">W</button>
+          <button></button>
+          <button data-dir="left">A</button>
+          <button data-dir="stop" class="warn">Stop</button>
+          <button data-dir="right">D</button>
+          <button></button>
+          <button data-dir="backward">S</button>
+          <button></button>
+        </div>
+      </section>
+      <section>
+        <h2>Mapping</h2>
+        <div class="grid">
+          <button id="startMapping" class="primary">Start Mapping</button>
+          <button id="stopMapping">Stop SLAM</button>
+          <button id="saveMap" class="warn">Save Map</button>
+        </div>
+        <div style="margin-top: 8px;">
+          <input id="mapName" type="text" value="lab_first_map" aria-label="Map name">
+        </div>
+      </section>
+      <section>
+        <h2>Laser Tracking</h2>
+        <div class="grid">
+          <button id="startLaserTracking" class="primary wide">Start Laser Tracking</button>
+          <button id="stopLaserTracking" class="warn wide">Stop Tracking</button>
+        </div>
+      </section>
+      <section>
+        <h2>Camera</h2>
+        <div class="grid">
+          <button id="sampleCamera" class="primary">Sample</button>
+          <button id="snapshot" class="wide">Save Snapshot</button>
+        </div>
+      </section>
+      <section>
+        <h2>Safety</h2>
+        <div class="grid">
+          <button id="stopAll" class="warn">Stop All</button>
+          <button id="estop" class="danger wide">Emergency Stop</button>
+          <button id="clearEstop" class="wide">Clear E-Stop</button>
+        </div>
+      </section>
+      <section>
+        <h2>Status</h2>
+        <pre id="status">{}</pre>
+      </section>
+    </aside>
+  </main>
+  <script>
+    const speed = document.getElementById("speed");
+    const speedValue = document.getElementById("speedValue");
+    const statusEl = document.getElementById("status");
+    const modeEl = document.getElementById("mode");
+    const dotEl = document.getElementById("ws-dot");
+    const sampleFrame = document.getElementById("sampleFrame");
+    const samplePlaceholder = document.getElementById("samplePlaceholder");
+    const sampleTime = document.getElementById("sampleTime");
+    const activeKeys = new Set();
+    const motionTtlMs = 1500;
+    const motionPeriodMs = 100;
+    let activeDir = "stop";
+    let commandTimer = null;
+    let motionInFlight = false;
+
+    function payloadFor(dir) {
+      const v = Number(speed.value);
+      if (dir === "keyboard") return payloadForActiveKeys();
+      if (dir === "forward") return {linear_x: v, linear_y: 0, angular_z: 0};
+      if (dir === "backward") return {linear_x: -v, linear_y: 0, angular_z: 0};
+      if (dir === "left") return {linear_x: 0, linear_y: 0, angular_z: v * 3};
+      if (dir === "right") return {linear_x: 0, linear_y: 0, angular_z: -v * 3};
+      return {linear_x: 0, linear_y: 0, angular_z: 0};
+    }
+
+    function payloadForActiveKeys() {
+      const v = Number(speed.value);
+      let linearX = 0;
+      let angularZ = 0;
+      if (activeKeys.has("w") && !activeKeys.has("s")) linearX = v;
+      if (activeKeys.has("s") && !activeKeys.has("w")) linearX = -v;
+      if (activeKeys.has("a") && !activeKeys.has("d")) angularZ = v * 3;
+      if (activeKeys.has("d") && !activeKeys.has("a")) angularZ = -v * 3;
+      return {linear_x: linearX, linear_y: 0, angular_z: angularZ};
+    }
+
+    function hasMotionKeys() {
+      return activeKeys.has("w") || activeKeys.has("s") || activeKeys.has("a") || activeKeys.has("d");
+    }
+
+    async function postJson(url, body = {}) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || res.statusText);
+      return data;
+    }
+
+    async function sendMotion() {
+      if (activeDir === "stop" || motionInFlight) return;
+      const body = {...payloadFor(activeDir), ttl_ms: motionTtlMs, source: "web"};
+      motionInFlight = true;
+      try { await postJson("/api/control/manual_cmd", body); }
+      catch (err) { console.error(err); }
+      finally { motionInFlight = false; }
+    }
+
+    async function stopMotion() {
+      activeDir = "stop";
+      if (commandTimer) {
+        clearInterval(commandTimer);
+        commandTimer = null;
+      }
+      try { await postJson("/api/control/stop"); }
+      catch (err) { console.error(err); }
+    }
+
+    function startMotion(dir) {
+      if (dir === "stop") {
+        stopMotion();
+        return;
+      }
+      activeDir = dir;
+      sendMotion();
+      if (!commandTimer) commandTimer = setInterval(sendMotion, motionPeriodMs);
+    }
+
+    function updateKeyboardMotion() {
+      if (!hasMotionKeys()) {
+        stopMotion();
+        return;
+      }
+      startMotion("keyboard");
+    }
+
+    document.querySelectorAll("button[data-dir]").forEach((button) => {
+      button.addEventListener("mousedown", () => startMotion(button.dataset.dir));
+      button.addEventListener("mouseup", stopMotion);
+      button.addEventListener("mouseleave", () => {
+        if (activeDir === button.dataset.dir) stopMotion();
+      });
+      button.addEventListener("touchstart", (event) => {
+        event.preventDefault();
+        startMotion(button.dataset.dir);
+      }, {passive: false});
+      button.addEventListener("touchend", stopMotion);
+    });
+
+    const keyMap = {
+      "w": "forward",
+      "s": "backward",
+      "a": "left",
+      "d": "right",
+      " ": "stop"
+    };
+    window.addEventListener("keydown", (event) => {
+      const key = event.key.toLowerCase();
+      if (!(key in keyMap) || activeKeys.has(key)) return;
+      event.preventDefault();
+      if (keyMap[key] === "stop") {
+        activeKeys.clear();
+        stopMotion();
+        return;
+      }
+      activeKeys.add(key);
+      updateKeyboardMotion();
+    });
+    window.addEventListener("keyup", (event) => {
+      const key = event.key.toLowerCase();
+      if (!(key in keyMap)) return;
+      event.preventDefault();
+      activeKeys.delete(key);
+      updateKeyboardMotion();
+    });
+
+    speed.addEventListener("input", () => {
+      speedValue.textContent = Number(speed.value).toFixed(2);
+    });
+
+    document.getElementById("startMapping").onclick = () => postJson("/api/mapping/start").catch(alert);
+    document.getElementById("stopMapping").onclick = () => postJson("/api/mapping/stop").catch(alert);
+    document.getElementById("saveMap").onclick = () => {
+      const name = document.getElementById("mapName").value || "map";
+      postJson("/api/mapping/save", {name}).then((r) => alert(JSON.stringify(r, null, 2))).catch(alert);
+    };
+    document.getElementById("startLaserTracking").onclick = () => postJson("/api/tracking/laser/start").catch(alert);
+    document.getElementById("stopLaserTracking").onclick = () => postJson("/api/tracking/laser/stop").catch(alert);
+    document.getElementById("sampleCamera").onclick = () => {
+      const now = new Date();
+      sampleFrame.onload = () => {
+        samplePlaceholder.hidden = true;
+        sampleFrame.hidden = false;
+        sampleTime.textContent = `Sample: ${now.toLocaleTimeString()}`;
+      };
+      sampleFrame.onerror = () => {
+        sampleFrame.hidden = true;
+        samplePlaceholder.hidden = false;
+        samplePlaceholder.textContent = "Camera sample failed";
+      };
+      sampleFrame.src = `/api/video/sample.jpg?t=${Date.now()}`;
+    };
+    document.getElementById("snapshot").onclick = () => postJson("/api/video/snapshot").then((r) => alert(r.path || r.message)).catch(alert);
+    document.getElementById("stopAll").onclick = () => postJson("/api/process/stop_all").catch(alert);
+    document.getElementById("estop").onclick = () => postJson("/api/control/estop").catch(alert);
+    document.getElementById("clearEstop").onclick = () => postJson("/api/system/clear_estop").catch(alert);
+
+    function connectWs() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onopen = () => {
+        dotEl.classList.remove("offline");
+        dotEl.classList.add("online");
+      };
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type !== "status") return;
+        const data = message.data;
+        modeEl.textContent = data.mode;
+        statusEl.textContent = JSON.stringify(data, null, 2);
+      };
+      ws.onclose = () => {
+        dotEl.classList.remove("online");
+        dotEl.classList.add("offline");
+        modeEl.textContent = "DISCONNECTED";
+        setTimeout(connectWs, 1000);
+      };
+    }
+    connectWs();
+  </script>
+</body>
+</html>

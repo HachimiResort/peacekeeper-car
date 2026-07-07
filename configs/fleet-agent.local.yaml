@@ -1,0 +1,42 @@
+host: 127.0.0.1
+port: 8001
+workspace: /tmp
+data_dir: /tmp/peacekeeper-car-data
+
+ros:
+  distro_setup: ""
+  workspace_setup: ""
+  cmd_vel_topic: /cmd_vel
+  scan_topic: /scan
+  map_topic: /map
+  mock_cmd_vel: true
+
+safety:
+  default_ttl_ms: 300
+  watchdog_period_s: 0.05
+  max_linear_x: 0.45
+  max_linear_y: 0.45
+  max_angular_z: 1.4
+
+video:
+  device: 0
+  width: 640
+  height: 480
+  fps: 10
+
+processes:
+  chassis:
+    name: chassis
+    command: python3 -c "import time; time.sleep(3600)"
+    auto_start: false
+  lidar:
+    name: lidar
+    command: python3 -c "import time; time.sleep(3600)"
+    auto_start: false
+  slam:
+    name: slam
+    command: python3 -c "import time; time.sleep(3600)"
+    auto_start: false
+
+mapping:
+  saver_command: python3 -c "from pathlib import Path; p=Path('{map_path}'); p.with_suffix('.yaml').write_text('image: '+p.name+'.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n'); p.with_suffix('.pgm').write_text('P2\n1 1\n255\n0\n')"
