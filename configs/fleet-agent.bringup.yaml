@@ -1,0 +1,45 @@
+host: 0.0.0.0
+port: 8001
+workspace: /root/peacekeeper-car/robot/ros2_ws
+data_dir: /root/peacekeeper-car/data
+
+ros:
+  distro_setup: /opt/ros/foxy/setup.bash
+  workspace_setup: /root/peacekeeper-car/robot/ros2_ws/install/setup.bash
+  cmd_vel_topic: /cmd_vel
+  scan_topic: /scan
+  map_topic: /map
+
+safety:
+  default_ttl_ms: 1500
+  watchdog_period_s: 0.1
+  max_linear_x: 0.45
+  max_linear_y: 0.45
+  max_angular_z: 1.4
+
+video:
+  device: 0
+  width: 640
+  height: 480
+  fps: 20
+
+processes:
+  chassis:
+    name: chassis
+    command: ros2 launch peacekeeper_bringup chassis.launch.py command_timeout_s:=2.0
+    auto_start: false
+  lidar:
+    name: lidar
+    command: ros2 launch peacekeeper_bringup lidar.launch.py
+    auto_start: false
+  laser_tracker:
+    name: laser_tracker
+    command: bash -lc 'source /root/yahboomcar_ros2_ws/yahboomcar_ws/install/setup.bash && exec ros2 run icar_laser laser_Tracker_a1_X3'
+    auto_start: false
+  slam:
+    name: slam
+    command: ros2 launch peacekeeper_bringup slam.launch.py
+    auto_start: false
+
+mapping:
+  saver_command: ros2 run nav2_map_server map_saver_cli -f {map_path}
