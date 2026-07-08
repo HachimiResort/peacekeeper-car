@@ -40,7 +40,7 @@ class VideoConfig:
 
 @dataclass
 class ControlConfig:
-    backend: str = "ros_cmd_vel"
+    backend: str = "rosmaster"
     rosmaster_port: str = "/dev/myserial"
     rosmaster_speed: int = 25
     direct_deadband: float = 0.01
@@ -72,10 +72,6 @@ class AgentConfig:
     control: ControlConfig = field(default_factory=ControlConfig)
     processes: Dict[str, ProcessConfig] = field(
         default_factory=lambda: {
-            "chassis": ProcessConfig(
-                name="chassis",
-                command="ros2 run yahboomcar_bringup Mcnamu_driver_X3",
-            ),
             "lidar": ProcessConfig(
                 name="lidar",
                 command="ros2 launch sllidar_ros2 sllidar_launch.py",

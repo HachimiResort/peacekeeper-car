@@ -2,7 +2,7 @@
 <package format="3">
   <name>peacekeeper_bringup</name>
   <version>0.1.0</version>
-  <description>Peacekeeper v1 ROS chassis bridge and launch wrappers.</description>
+  <description>Peacekeeper v1 ROS helper launch files and diagnostics.</description>
   <maintainer email="peacekeeper@example.invalid">Peacekeeper Team</maintainer>
   <license>MIT</license>
 

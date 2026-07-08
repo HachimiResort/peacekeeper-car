@@ -10,10 +10,8 @@ setup(
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/launch", [
-            "launch/chassis.launch.py",
             "launch/lidar.launch.py",
             "launch/slam.launch.py",
-            "launch/mapping_stack.launch.py",
         ]),
     ],
     install_requires=["setuptools"],
@@ -24,7 +22,6 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
-            "rosmaster_chassis = peacekeeper_bringup.rosmaster_chassis:main",
             "teleop_cmd_vel = peacekeeper_bringup.teleop_cmd_vel:main",
             "topic_watchdog = peacekeeper_bringup.topic_watchdog:main",
         ],

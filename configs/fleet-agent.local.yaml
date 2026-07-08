@@ -3,6 +3,14 @@ port: 8001
 workspace: /tmp
 data_dir: /tmp/peacekeeper-car-data
 
+control:
+  backend: rosmaster
+  rosmaster_port: /dev/myserial
+  rosmaster_speed: 25
+  direct_deadband: 0.01
+  direct_motion_mode: motion
+  manual_override_s: 0.8
+
 ros:
   distro_setup: ""
   workspace_setup: ""
@@ -25,12 +33,12 @@ video:
   fps: 10
 
 processes:
-  chassis:
-    name: chassis
-    command: python3 -c "import time; time.sleep(3600)"
-    auto_start: false
   lidar:
     name: lidar
+    command: python3 -c "import time; time.sleep(3600)"
+    auto_start: false
+  laser_tracker:
+    name: laser_tracker
     command: python3 -c "import time; time.sleep(3600)"
     auto_start: false
   slam:

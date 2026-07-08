@@ -12,7 +12,7 @@ The v1 loop is intentionally narrow and demonstrable:
 ```text
 Start fleet-agent
 -> open the ROS control web demo
--> start chassis, lidar, and SLAM
+-> start lidar and SLAM
 -> drive manually through /cmd_vel
 -> build and save a map
 -> click to sample camera frames or save snapshots
@@ -34,9 +34,6 @@ python3 -m pip install -r requirements.txt
 python3 agent.py --config ../../configs/fleet-agent.direct.yaml
 ```
 
-Use `configs/fleet-agent.bringup.yaml` only when deliberately testing the
-separate ROS chassis bridge path.
-
 Then open:
 
 ```text
@@ -53,6 +50,6 @@ For Docker host launch guidance, see `robot/fleet-agent/run_in_docker.sh`.
 - `POST /api/control/cmd_vel` - publish a TTL-limited velocity command.
 - `POST /api/control/stop` - publish zero velocity.
 - `POST /api/control/estop` - emergency stop.
-- `POST /api/mapping/start` - start chassis, lidar, and SLAM.
+- `POST /api/mapping/start` - start lidar and SLAM.
 - `POST /api/mapping/save` - save the current map.
 - `POST /api/video/snapshot` - save a current first-person frame.

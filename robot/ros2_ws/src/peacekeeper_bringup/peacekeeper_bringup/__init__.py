@@ -1,1 +1,1 @@
-"""Peacekeeper ROS2 bringup helpers."""
+"""Peacekeeper ROS2 helper package for direct-mode tooling."""

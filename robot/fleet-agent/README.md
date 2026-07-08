@@ -4,8 +4,8 @@
 
 - First-person web control demo.
 - HTTP and WebSocket status APIs.
-- TTL-limited `/cmd_vel` publishing for manual driving.
-- ROS2 process management for chassis, lidar, and SLAM.
+- Direct Rosmaster command execution for manual driving and ROS-owned `/cmd_vel`.
+- ROS2 process management for lidar and SLAM.
 - Click-to-sample camera frames and saved snapshots.
 - Map saving through `map_saver_cli`.
 
@@ -16,8 +16,8 @@ falls back to a static JPEG if OpenCV is missing.
 
 ## Control Ownership
 
-The direct backend is the target vehicle-side control path. In that mode,
-fleet-agent owns `/dev/myserial`, keeps a ROS2 `/cmd_vel` subscriber running, and
+fleet-agent always runs in direct mode. It owns `/dev/myserial`, keeps a ROS2
+`/cmd_vel` subscriber running, and
 passes every chassis command through its local arbiter before calling
 `Rosmaster_Lib`.
 
@@ -26,21 +26,13 @@ ros2_ws /cmd_vel -> fleet-agent subscriber -> command arbiter -> Rosmaster_Lib -
 Web manual cmd  -> fleet-agent HTTP      -> command arbiter -> Rosmaster_Lib -> /dev/myserial -> car
 ```
 
-The legacy ROS publishing path is still available for inspection with older car
-images:
+Use `configs/fleet-agent.direct.yaml` or a direct-mode equivalent. Do not start
+another process that also writes `/dev/myserial`.
+
+Laser tracking is available as a small experiment in the same direct chain:
 
 ```text
-Web -> fleet-agent -> /cmd_vel -> external chassis driver -> serial -> car
-```
-
-Use `configs/fleet-agent.direct.yaml` for the intended direct-mode bring-up. Do
-not start another chassis process that also writes `/dev/myserial`.
-
-Laser tracking is available as a small experiment in both paths:
-
-```text
-Direct:  laser_Tracker_a1_X3 -> /cmd_vel -> fleet-agent subscriber -> Rosmaster_Lib
-Bringup: laser_Tracker_a1_X3 -> /cmd_vel -> rosmaster_chassis -> Rosmaster_Lib
+laser_Tracker_a1_X3 -> /cmd_vel -> fleet-agent subscriber -> Rosmaster_Lib
 ```
 
 When using the direct config, start the agent from an environment that already
@@ -62,26 +54,14 @@ Inside the car container:
 ```bash
 cd /root/peacekeeper-car/robot/fleet-agent
 python3 -m pip install -r requirements.txt
-python3 agent.py --config ../../configs/fleet-agent.example.yaml
-```
-
-For the Peacekeeper ROS launch wrappers, build the workspace once and run the
-bringup config:
-
-```bash
-cd /root/peacekeeper-car/robot/ros2_ws
-source /opt/ros/foxy/setup.bash
-colcon build --symlink-install
-
-cd /root/peacekeeper-car/robot/fleet-agent
-python3 agent.py --config ../../configs/fleet-agent.bringup.yaml
+python3 agent.py --config ../../configs/fleet-agent.direct.yaml
 ```
 
 Or from the host:
 
 ```bash
 cd robot/fleet-agent
-CONFIG=../../configs/fleet-agent.bringup.yaml ./run_in_docker.sh
+CONFIG=../../configs/fleet-agent.direct.yaml ./run_in_docker.sh
 ```
 
 Open:

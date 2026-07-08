@@ -3,12 +3,21 @@ port: 8001
 workspace: /root/yahboomcar_ros2_ws/yahboomcar_ws
 data_dir: /root/peacekeeper-car/data
 
+control:
+  backend: rosmaster
+  rosmaster_port: /dev/myserial
+  rosmaster_speed: 25
+  direct_deadband: 0.01
+  direct_motion_mode: motion
+  manual_override_s: 0.8
+
 ros:
   distro_setup: /opt/ros/foxy/setup.bash
   workspace_setup: /root/yahboomcar_ros2_ws/yahboomcar_ws/install/setup.bash
   cmd_vel_topic: /cmd_vel
   scan_topic: /scan
   map_topic: /map
+  mock_cmd_vel: false
 
 safety:
   default_ttl_ms: 500
@@ -24,13 +33,13 @@ video:
   fps: 20
 
 processes:
-  chassis:
-    name: chassis
-    command: ros2 run yahboomcar_bringup Mcnamu_driver_X3
-    auto_start: false
   lidar:
     name: lidar
     command: ros2 launch sllidar_ros2 sllidar_launch.py
+    auto_start: false
+  laser_tracker:
+    name: laser_tracker
+    command: ros2 run icar_laser laser_Tracker_a1_X3
     auto_start: false
   slam:
     name: slam

@@ -15,7 +15,7 @@ from .command_arbiter import CommandArbiter
 from .config import AgentConfig
 from .mapping import MappingService
 from .process_manager import ProcessManager
-from .ros_control import CmdVelPublisher, DirectCmdVelSubscriber
+from .ros_control import DirectCmdVelSubscriber
 from .rosmaster_control import RosmasterController
 from .schemas import CmdVelRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
@@ -37,27 +37,18 @@ def create_app(config: AgentConfig) -> FastAPI:
     (data_dir / "logs").mkdir(parents=True, exist_ok=True)
 
     process_manager = ProcessManager(config)
-    direct_cmd_vel = None
-    direct_mode = config.control.backend == "rosmaster"
-    if config.control.backend == "rosmaster":
-        rosmaster = RosmasterController(config.control, config.safety)
-        cmd_vel = CommandArbiter(
-            rosmaster,
-            state,
-            config.safety,
-            manual_override_s=config.control.manual_override_s,
-        )
-        direct_cmd_vel = DirectCmdVelSubscriber(
-            config.ros.cmd_vel_topic,
-            cmd_vel,
-            setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
-        )
-    else:
-        cmd_vel = CmdVelPublisher(
-            config.ros.cmd_vel_topic,
-            config.safety,
-            allow_mock=config.ros.mock_cmd_vel,
-        )
+    rosmaster = RosmasterController(config.control, config.safety)
+    cmd_vel = CommandArbiter(
+        rosmaster,
+        state,
+        config.safety,
+        manual_override_s=config.control.manual_override_s,
+    )
+    direct_cmd_vel = DirectCmdVelSubscriber(
+        config.ros.cmd_vel_topic,
+        cmd_vel,
+        setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
+    )
     video = VideoService(config.video, run_dir)
     mapping = MappingService(config, process_manager)
 
@@ -123,50 +114,24 @@ def create_app(config: AgentConfig) -> FastAPI:
         )
 
     async def publish_manual_command(payload: CmdVelRequest):
-        if direct_mode:
-            if state.mode == Mode.LASER_TRACKING and is_zero_cmd(payload):
-                return await stop_laser_tracking()
-            result = await _run_blocking(
-                cmd_vel.handle_manual_command,
-                payload.linear_x,
-                payload.linear_y,
-                payload.angular_z,
-                payload.ttl_ms,
-            )
-            if not result["ok"]:
-                return JSONResponse(result, status_code=409)
-            return {"ok": True, "mode": state.mode.value, "source": payload.source}
-        if state.estop:
-            return JSONResponse({"ok": False, "message": "ESTOP is active"}, status_code=409)
-        if state.mode == Mode.LASER_TRACKING:
-            if is_zero_cmd(payload):
-                return await stop_laser_tracking()
-            return JSONResponse(
-                {"ok": False, "message": "Laser tracking is active; stop tracking before manual control"},
-                status_code=409,
-            )
-        try:
-            await _run_blocking(
-                cmd_vel.publish,
-                payload.linear_x,
-                payload.linear_y,
-                payload.angular_z,
-                payload.ttl_ms,
-            )
-            if state.mode == Mode.IDLE:
-                state.set_mode(Mode.MANUAL)
-            return {"ok": True, "mode": state.mode.value, "source": payload.source}
-        except Exception as exc:
-            state.set_error(str(exc))
-            return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)
+        if state.mode == Mode.LASER_TRACKING and is_zero_cmd(payload):
+            return await stop_laser_tracking()
+        result = await _run_blocking(
+            cmd_vel.handle_manual_command,
+            payload.linear_x,
+            payload.linear_y,
+            payload.angular_z,
+            payload.ttl_ms,
+        )
+        if not result["ok"]:
+            return JSONResponse(result, status_code=409)
+        return {"ok": True, "mode": state.mode.value, "source": payload.source}
 
     async def stop_laser_tracking():
         try:
             await _run_blocking(cmd_vel.stop)
             if "laser_tracker" in config.processes:
                 await _run_blocking(process_manager.stop, "laser_tracker")
-            if not direct_mode and state.mode == Mode.LASER_TRACKING:
-                state.set_mode(Mode.IDLE)
             return {"ok": True, "mode": state.mode.value}
         except Exception as exc:
             state.set_error(str(exc))
@@ -293,8 +258,6 @@ def create_app(config: AgentConfig) -> FastAPI:
                 status_code=409,
             )
         try:
-            if not direct_mode:
-                await _run_blocking(process_manager.start, "chassis")
             await _run_blocking(process_manager.start, "lidar")
             await _run_blocking(process_manager.start, "slam")
             state.set_mode(Mode.MAPPING)
@@ -319,18 +282,12 @@ def create_app(config: AgentConfig) -> FastAPI:
             return JSONResponse({"ok": False, "message": "laser_tracker process is not configured"}, status_code=500)
         try:
             await _run_blocking(cmd_vel.stop)
-            if direct_cmd_vel is not None:
-                await _run_blocking(direct_cmd_vel.start)
-            else:
-                await _run_blocking(process_manager.start, "chassis")
+            await _run_blocking(direct_cmd_vel.start)
             await _run_blocking(process_manager.start, "lidar")
-            if direct_mode:
-                result = await _run_blocking(cmd_vel.enable_ros_cmd_vel, Mode.LASER_TRACKING)
-                if not result["ok"]:
-                    return JSONResponse(result, status_code=409)
+            result = await _run_blocking(cmd_vel.enable_ros_cmd_vel, Mode.LASER_TRACKING)
+            if not result["ok"]:
+                return JSONResponse(result, status_code=409)
             await _run_blocking(process_manager.start, "laser_tracker")
-            if not direct_mode:
-                state.set_mode(Mode.LASER_TRACKING)
             processes = await _run_blocking(process_manager.status)
             return {"ok": True, "mode": state.mode.value, "processes": processes}
         except Exception as exc:
@@ -343,17 +300,11 @@ def create_app(config: AgentConfig) -> FastAPI:
 
     @app.post("/api/control/ros_cmd_vel/start")
     async def ros_cmd_vel_start():
-        if not direct_mode:
-            return JSONResponse(
-                {"ok": False, "message": "ROS /cmd_vel ownership is only managed in direct mode"},
-                status_code=409,
-            )
-        if direct_cmd_vel is not None:
-            try:
-                await _run_blocking(direct_cmd_vel.start)
-            except Exception as exc:
-                state.set_error(str(exc))
-                return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)
+        try:
+            await _run_blocking(direct_cmd_vel.start)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)
         result = await _run_blocking(cmd_vel.enable_ros_cmd_vel, Mode.NAV_PATROL)
         if not result["ok"]:
             return JSONResponse(result, status_code=409)
@@ -361,11 +312,6 @@ def create_app(config: AgentConfig) -> FastAPI:
 
     @app.post("/api/control/ros_cmd_vel/stop")
     async def ros_cmd_vel_stop():
-        if not direct_mode:
-            return JSONResponse(
-                {"ok": False, "message": "ROS /cmd_vel ownership is only managed in direct mode"},
-                status_code=409,
-            )
         await _run_blocking(cmd_vel.stop)
         return {"ok": True, "mode": state.mode.value}
 

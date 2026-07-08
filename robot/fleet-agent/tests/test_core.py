@@ -114,11 +114,9 @@ class FakeDirectSubscriber:
         return {"available": True, "ready": self.start_count > self.shutdown_count}
 
 
-def tracking_config(backend="rosmaster"):
+def tracking_config():
     config = AgentConfig()
-    config.control.backend = backend
     config.processes = {
-        "chassis": ProcessConfig(name="chassis", command="chassis"),
         "lidar": ProcessConfig(name="lidar", command="lidar"),
         "laser_tracker": ProcessConfig(name="laser_tracker", command="laser_tracker"),
     }
@@ -265,7 +263,7 @@ class CoreTests(unittest.TestCase):
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_tracking_mode_rejects_nonzero_manual_cmd(self):
-        config = tracking_config("rosmaster")
+        config = tracking_config()
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
@@ -283,7 +281,7 @@ class CoreTests(unittest.TestCase):
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_tracking_stop_stops_tracker_and_returns_idle(self):
-        config = tracking_config("rosmaster")
+        config = tracking_config()
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
@@ -301,7 +299,7 @@ class CoreTests(unittest.TestCase):
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_direct_tracking_start_skips_chassis(self):
-        config = tracking_config("rosmaster")
+        config = tracking_config()
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
@@ -316,18 +314,6 @@ class CoreTests(unittest.TestCase):
                 self.assertEqual(fake_subscriber.start_count, 1)
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
-    def test_bringup_tracking_start_runs_chassis_lidar_and_tracker(self):
-        config = tracking_config("ros_cmd_vel")
-        fake_pm = FakeManagedProcessManager(config)
-        fake_controller = FakeMotionController()
-        with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
-                patch.object(app_module, "CmdVelPublisher", return_value=fake_controller):
-            app = app_module.create_app(config)
-            with TestClient(app) as client:
-                response = client.post("/api/tracking/laser/start")
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(fake_pm.started, ["chassis", "lidar", "laser_tracker"])
-
     def test_direct_cmd_vel_subscriber_forwards_twist_to_controller(self):
         class Vector:
             def __init__(self, x=0.0, y=0.0, z=0.0):
