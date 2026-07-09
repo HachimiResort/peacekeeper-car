@@ -5,6 +5,7 @@
 - First-person web control demo.
 - HTTP and WebSocket status APIs.
 - Direct Rosmaster command execution for manual driving and ROS-owned `/cmd_vel`.
+- Direct ROS odometry/TF publishing for SLAM and map saving.
 - ROS2 process management for lidar and SLAM.
 - Click-to-sample camera frames and saved snapshots.
 - Map saving through `map_saver_cli`.
@@ -24,6 +25,7 @@ passes every chassis command through its local arbiter before calling
 ```text
 ros2_ws /cmd_vel -> fleet-agent subscriber -> command arbiter -> Rosmaster_Lib -> /dev/myserial -> car
 Web manual cmd  -> fleet-agent HTTP      -> command arbiter -> Rosmaster_Lib -> /dev/myserial -> car
+Rosmaster motion feedback -> direct odom bridge -> /odom + /tf -> SLAM / map_saver_cli
 ```
 
 Use `configs/fleet-agent.direct.yaml` or a direct-mode equivalent. Do not start
@@ -41,11 +43,24 @@ can import `rclpy` and `geometry_msgs`. The subscriber starts with the agent, bu
 ROS `/cmd_vel` is executed only while the arbiter is in an allowed ROS-owned
 mode such as `LASER_TRACKING` or `NAV_PATROL`.
 
+For mapping, `Start Mapping` starts lidar plus SLAM. The app itself keeps a
+direct-mode odom/TF bridge alive, and the bridge now prefers
+`Rosmaster_Lib.get_motion_data()` over command integration, so the installed
+`yahboomcar_nav` gmapping launch sees `/odom` and `odom -> base_link` TF from
+real chassis feedback whenever the board exposes it.
+`Save Map` then runs `map_saver_cli` against the live `/map` topic and writes
+`<data_dir>/maps/<name>.yaml` plus `<data_dir>/maps/<name>.pgm`. The default
+save command sets `save_map_timeout:=120000`, and the agent retries once when
+`map_saver_cli` reports a timeout because larger Yahboom maps can save slowly
+under load.
+
 If direct laser tracking starts but the car does not move, check
 `GET /api/status`. In `ros.direct_cmd_vel_subscriber`, `ready` should be true,
 `spin_thread_alive` should be true, `enabled` should be true, `message_count`
 should increase while the tracker is running, and `ros_import_error` should be
-null. In `ros.arbiter`, rejected commands show up as `last_reject_reason`.
+null. In `ros.direct_odom_bridge`, `ready` should be true and `pose` should
+change while the car moves. In `ros.arbiter`, rejected commands show up as
+`last_reject_reason`.
 
 ## Run
 

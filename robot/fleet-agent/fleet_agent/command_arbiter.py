@@ -20,11 +20,13 @@ class CommandArbiter:
         state: RuntimeState,
         safety: SafetyConfig,
         manual_override_s: float = 0.8,
+        motion_sink=None,
     ):
         self.controller = controller
         self.state = state
         self.safety = safety
         self.manual_override_s = manual_override_s
+        self.motion_sink = motion_sink
         self.lock = threading.RLock()
         self.manual_override_until = 0.0
         self.accepted_count = 0
@@ -56,6 +58,7 @@ class CommandArbiter:
         with self.lock:
             self.manual_override_until = now + self.manual_override_s
             self._accept_unlocked("manual", linear_x, linear_y, angular_z)
+        self._notify_motion(linear_x, linear_y, angular_z, ttl_ms)
 
         if zero:
             if self.state.mode in (Mode.MANUAL, Mode.NAV_PATROL):
@@ -96,6 +99,12 @@ class CommandArbiter:
 
         with self.lock:
             self._accept_unlocked("ros", linear_x, linear_y, angular_z)
+        self._notify_motion(
+            linear_x,
+            linear_y,
+            angular_z,
+            ttl_ms if ttl_ms is not None else self.safety.default_ttl_ms,
+        )
         return self._ok("ros")
 
     def publish(self, linear_x: float, linear_y: float, angular_z: float, ttl_ms: Optional[int] = None) -> dict:
@@ -114,6 +123,7 @@ class CommandArbiter:
 
     def stop(self) -> None:
         self._stop_controller()
+        self._notify_stop()
         with self.lock:
             self.manual_override_until = 0.0
             self.last_command = {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
@@ -143,6 +153,22 @@ class CommandArbiter:
     def _stop_controller(self) -> None:
         try:
             self.controller.stop()
+        except Exception:
+            pass
+
+    def _notify_motion(self, linear_x: float, linear_y: float, angular_z: float, ttl_ms: Optional[int]) -> None:
+        if self.motion_sink is None:
+            return
+        try:
+            self.motion_sink.update_command(linear_x, linear_y, angular_z, ttl_ms=ttl_ms)
+        except Exception:
+            pass
+
+    def _notify_stop(self) -> None:
+        if self.motion_sink is None:
+            return
+        try:
+            self.motion_sink.stop()
         except Exception:
             pass
 

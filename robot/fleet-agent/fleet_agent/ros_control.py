@@ -1,6 +1,7 @@
 """ROS2 /cmd_vel publisher/subscriber helpers with TTL safety."""
 from __future__ import annotations
 
+import math
 import threading
 import time
 import os
@@ -14,6 +15,11 @@ from .config import SafetyConfig
 
 rclpy = None
 Twist = None
+TransformStamped = None
+Odometry = None
+TransformBroadcaster = None
+StaticTransformBroadcaster = None
+SingleThreadedExecutor = None
 _ros_import_error: Optional[str] = None
 _ros_environment_loaded = False
 
@@ -51,20 +57,41 @@ def _source_ros_environment(setup_paths) -> None:
 
 def _ensure_ros_python(setup_paths=()) -> bool:
     """Import rclpy and geometry_msgs after optional ROS environment setup."""
-    global rclpy, Twist, _ros_import_error
-    if rclpy is not None and Twist is not None:
+    global rclpy, Twist, TransformStamped, Odometry, TransformBroadcaster, StaticTransformBroadcaster, SingleThreadedExecutor, _ros_import_error
+    if (
+        rclpy is not None
+        and Twist is not None
+        and TransformStamped is not None
+        and Odometry is not None
+        and TransformBroadcaster is not None
+        and StaticTransformBroadcaster is not None
+        and SingleThreadedExecutor is not None
+    ):
         return True
     try:
         _source_ros_environment(setup_paths)
         rclpy = import_module("rclpy")
         geometry_msgs = import_module("geometry_msgs.msg")
+        nav_msgs = import_module("nav_msgs.msg")
+        tf2_ros = import_module("tf2_ros")
+        executors = import_module("rclpy.executors")
         Twist = geometry_msgs.Twist
+        TransformStamped = geometry_msgs.TransformStamped
+        Odometry = nav_msgs.Odometry
+        TransformBroadcaster = tf2_ros.TransformBroadcaster
+        StaticTransformBroadcaster = tf2_ros.StaticTransformBroadcaster
+        SingleThreadedExecutor = executors.SingleThreadedExecutor
         _ros_import_error = None
         return True
     except Exception as exc:  # pragma: no cover - depends on ROS runtime.
         _ros_import_error = str(exc)
         rclpy = None
         Twist = None
+        TransformStamped = None
+        Odometry = None
+        TransformBroadcaster = None
+        StaticTransformBroadcaster = None
+        SingleThreadedExecutor = None
         return False
 
 
@@ -209,6 +236,7 @@ class DirectCmdVelSubscriber:
         self.controller = controller
         self.setup_paths = tuple(setup_paths or ())
         self.node = None
+        self.executor = None
         self.subscription = None
         self.lock = threading.RLock()
         self.enabled = False
@@ -231,8 +259,10 @@ class DirectCmdVelSubscriber:
             if not rclpy.ok():
                 rclpy.init(args=None)
             self.node = rclpy.create_node("peacekeeper_direct_cmd_vel_subscriber")
+            self.executor = SingleThreadedExecutor()
+            self.executor.add_node(self.node)
             self.subscription = self.node.create_subscription(Twist, self.topic, self._on_msg, 10)
-            self._spin_thread = threading.Thread(target=self._spin, args=(self.node,), daemon=True)
+            self._spin_thread = threading.Thread(target=self._spin, daemon=True)
             self._spin_thread.start()
 
     def stop(self) -> None:
@@ -243,8 +273,15 @@ class DirectCmdVelSubscriber:
         with self.lock:
             self.enabled = False
             node = self.node
+            executor = self.executor
             self.node = None
+            self.executor = None
             self.subscription = None
+        if executor is not None:
+            try:
+                executor.shutdown()
+            except Exception:
+                pass
         if node is not None:
             try:
                 node.destroy_node()
@@ -296,10 +333,310 @@ class DirectCmdVelSubscriber:
     def _on_msg(self, msg) -> None:
         self.handle_twist(msg)
 
-    def _spin(self, node) -> None:
+    def _spin(self) -> None:
         try:
-            if node is not None:
-                rclpy.spin(node)
+            executor = self.executor
+            if executor is not None:
+                executor.spin()
         except Exception as exc:
             with self.lock:
                 self.last_error = str(exc)
+
+
+class DirectOdomPublisher:
+    """Publish integrated odom/tf for direct-mode SLAM and map saving."""
+
+    def __init__(
+        self,
+        odom_topic: str,
+        odom_frame: str,
+        base_frame: str,
+        safety: SafetyConfig,
+        setup_paths=None,
+        feedback_source=None,
+        publish_odom: bool = True,
+        publish_tf: bool = True,
+        period_s: float = 0.05,
+        motion_deadband: float = 0.01,
+        base_link_frame: str = "base_link",
+        linear_x_scale: float = 1.0,
+        linear_y_scale: float = 1.0,
+        angular_z_scale: float = 1.0,
+    ):
+        self.odom_topic = odom_topic
+        self.odom_frame = odom_frame
+        self.base_frame = base_frame
+        self.base_link_frame = base_link_frame
+        self.safety = safety
+        self.setup_paths = tuple(setup_paths or ())
+        self.feedback_source = feedback_source
+        self.publish_odom_enabled = bool(publish_odom)
+        self.publish_tf_enabled = bool(publish_tf)
+        self.period_s = max(0.02, float(period_s))
+        self.motion_deadband = max(0.0, float(motion_deadband))
+        self.motion_scales = {
+            "linear_x": float(linear_x_scale),
+            "linear_y": float(linear_y_scale),
+            "angular_z": float(angular_z_scale),
+        }
+        self.node = None
+        self.executor = None
+        self.odom_pub = None
+        self.tf_broadcaster = None
+        self.static_tf_broadcaster = None
+        self.timer = None
+        self.lock = threading.RLock()
+        self.deadline: Optional[float] = None
+        self.current_cmd = {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
+        self.last_feedback = {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
+        self.last_motion = {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
+        self.motion_source = "command_fallback"
+        self.x = 0.0
+        self.y = 0.0
+        self.yaw = 0.0
+        self.last_tick = time.monotonic()
+        self.last_error: Optional[str] = None
+        self._feedback_zero_since: Optional[float] = None
+        self._spin_thread = None
+
+    @property
+    def available(self) -> bool:
+        return _ensure_ros_python(self.setup_paths)
+
+    def start(self) -> None:
+        if not self.available:
+            raise RuntimeError(f"ROS2 Python modules are not available: {_ros_import_error}")
+        with self.lock:
+            if self.node is not None:
+                return
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            self.node = rclpy.create_node("peacekeeper_direct_odom_bridge")
+            self.executor = SingleThreadedExecutor()
+            self.executor.add_node(self.node)
+            if self.publish_odom_enabled:
+                self.odom_pub = self.node.create_publisher(Odometry, self.odom_topic, 10)
+            if self.publish_tf_enabled:
+                self.tf_broadcaster = TransformBroadcaster(self.node)
+                self.static_tf_broadcaster = StaticTransformBroadcaster(self.node)
+                self._publish_static_base_link_unlocked()
+            self.timer = self.node.create_timer(self.period_s, self._on_timer)
+            self.last_tick = time.monotonic()
+            self._spin_thread = threading.Thread(target=self._spin, daemon=True)
+            self._spin_thread.start()
+
+    def update_command(self, linear_x: float, linear_y: float, angular_z: float, ttl_ms: Optional[int] = None) -> None:
+        with self.lock:
+            self.current_cmd = {
+                "linear_x": self._clip(linear_x, self.safety.max_linear_x),
+                "linear_y": self._clip(linear_y, self.safety.max_linear_y),
+                "angular_z": self._clip(angular_z, self.safety.max_angular_z),
+            }
+            ttl = ttl_ms if ttl_ms is not None else self.safety.default_ttl_ms
+            self.deadline = time.monotonic() + ttl / 1000.0
+            self.last_error = None
+
+    def stop(self) -> None:
+        with self.lock:
+            self.current_cmd = {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
+            self.deadline = None
+
+    def shutdown(self) -> None:
+        with self.lock:
+            node = self.node
+            executor = self.executor
+            self.node = None
+            self.executor = None
+            self.odom_pub = None
+            self.tf_broadcaster = None
+            self.static_tf_broadcaster = None
+            self.timer = None
+        if executor is not None:
+            try:
+                executor.shutdown()
+            except Exception:
+                pass
+        if node is not None:
+            try:
+                node.destroy_node()
+            except Exception:
+                pass
+
+    def status(self) -> dict:
+        with self.lock:
+            return {
+                "available": self.available,
+                "ros_import_error": _ros_import_error,
+                "ready": self.node is not None,
+                "odom_topic": self.odom_topic,
+                "odom_frame": self.odom_frame,
+                "base_frame": self.base_frame,
+                "base_link_frame": self.base_link_frame,
+                "publish_odom": self.publish_odom_enabled,
+                "publish_tf": self.publish_tf_enabled,
+                "period_s": self.period_s,
+                "motion_scales": dict(self.motion_scales),
+                "feedback_available": self.feedback_source is not None and hasattr(self.feedback_source, "read_motion"),
+                "last_command": dict(self.current_cmd),
+                "last_feedback": dict(self.last_feedback),
+                "last_motion": dict(self.last_motion),
+                "motion_source": self.motion_source,
+                "ttl_active": self.deadline is not None and time.monotonic() < self.deadline,
+                "pose": {"x": self.x, "y": self.y, "yaw": self.yaw},
+                "last_error": self.last_error,
+                "spin_thread_alive": self._spin_thread is not None and self._spin_thread.is_alive(),
+            }
+
+    def _on_timer(self) -> None:
+        now = time.monotonic()
+        with self.lock:
+            dt = max(0.0, min(now - self.last_tick, 0.2))
+            self.last_tick = now
+            if self.deadline is not None and now > self.deadline:
+                self.current_cmd = {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
+                self.deadline = None
+            motion = self._resolve_motion_unlocked()
+            self._integrate_pose(dt, motion)
+            self._publish_unlocked(motion)
+
+    def _resolve_motion_unlocked(self) -> dict:
+        now = time.monotonic()
+        command_motion = {
+            "linear_x": self._scaled_motion_value("linear_x", self.current_cmd["linear_x"], self.safety.max_linear_x),
+            "linear_y": self._scaled_motion_value("linear_y", self.current_cmd["linear_y"], self.safety.max_linear_y),
+            "angular_z": self._scaled_motion_value("angular_z", self.current_cmd["angular_z"], self.safety.max_angular_z),
+        }
+        motion = dict(command_motion)
+        self.motion_source = "command_fallback"
+        if self.feedback_source is not None and hasattr(self.feedback_source, "read_motion"):
+            try:
+                feedback = self.feedback_source.read_motion()
+                feedback_motion = {
+                    "linear_x": self._scaled_motion_value("linear_x", feedback.get("linear_x", 0.0), self.safety.max_linear_x),
+                    "linear_y": self._scaled_motion_value("linear_y", feedback.get("linear_y", 0.0), self.safety.max_linear_y),
+                    "angular_z": self._scaled_motion_value("angular_z", feedback.get("angular_z", 0.0), self.safety.max_angular_z),
+                }
+                self.last_feedback = feedback_motion
+                if self._feedback_looks_stale(command_motion, feedback_motion):
+                    if self._feedback_zero_since is None:
+                        self._feedback_zero_since = now
+                    if now - self._feedback_zero_since >= max(self.period_s * 2.0, 0.15):
+                        self.motion_source = "command_fallback_stale_feedback"
+                        self.last_error = "Rosmaster feedback stayed zero while command was active; falling back to commanded motion"
+                    else:
+                        motion = feedback_motion
+                        self.motion_source = "feedback_warmup"
+                        self.last_error = None
+                else:
+                    self._feedback_zero_since = None
+                    motion = feedback_motion
+                    self.motion_source = "feedback"
+                    self.last_error = None
+            except Exception as exc:
+                self._feedback_zero_since = None
+                self.last_error = str(exc)
+        self.last_motion = motion
+        return motion
+
+    def _integrate_pose(self, dt: float, motion: dict) -> None:
+        vx = float(motion["linear_x"])
+        vy = float(motion["linear_y"])
+        wz = float(motion["angular_z"])
+        cos_yaw = math.cos(self.yaw)
+        sin_yaw = math.sin(self.yaw)
+        self.x += (vx * cos_yaw - vy * sin_yaw) * dt
+        self.y += (vx * sin_yaw + vy * cos_yaw) * dt
+        self.yaw = self._normalize_angle(self.yaw + wz * dt)
+
+    def _publish_unlocked(self, motion: dict) -> None:
+        if self.node is None:
+            return
+        stamp = self.node.get_clock().now().to_msg()
+        qz = math.sin(self.yaw * 0.5)
+        qw = math.cos(self.yaw * 0.5)
+
+        if self.publish_tf_enabled and self.tf_broadcaster is not None:
+            transform = TransformStamped()
+            transform.header.stamp = stamp
+            transform.header.frame_id = self.odom_frame
+            transform.child_frame_id = self.base_frame
+            transform.transform.translation.x = self.x
+            transform.transform.translation.y = self.y
+            transform.transform.translation.z = 0.0
+            transform.transform.rotation.z = qz
+            transform.transform.rotation.w = qw
+            self.tf_broadcaster.sendTransform(transform)
+
+        if self.publish_odom_enabled and self.odom_pub is not None:
+            odom = Odometry()
+            odom.header.stamp = stamp
+            odom.header.frame_id = self.odom_frame
+            odom.child_frame_id = self.base_frame
+            odom.pose.pose.position.x = self.x
+            odom.pose.pose.position.y = self.y
+            odom.pose.pose.orientation.z = qz
+            odom.pose.pose.orientation.w = qw
+            odom.twist.twist.linear.x = float(motion["linear_x"])
+            odom.twist.twist.linear.y = float(motion["linear_y"])
+            odom.twist.twist.angular.z = float(motion["angular_z"])
+            self.odom_pub.publish(odom)
+
+    def _publish_static_base_link_unlocked(self) -> None:
+        if (
+            self.node is None
+            or self.static_tf_broadcaster is None
+            or not self.base_link_frame
+            or self.base_link_frame == self.base_frame
+        ):
+            return
+        transform = TransformStamped()
+        transform.header.stamp = self.node.get_clock().now().to_msg()
+        transform.header.frame_id = self.base_frame
+        transform.child_frame_id = self.base_link_frame
+        transform.transform.translation.x = 0.0
+        transform.transform.translation.y = 0.0
+        transform.transform.translation.z = 0.0
+        transform.transform.rotation.w = 1.0
+        self.static_tf_broadcaster.sendTransform(transform)
+
+    def _spin(self) -> None:
+        try:
+            executor = self.executor
+            if executor is not None:
+                executor.spin()
+        except Exception as exc:
+            with self.lock:
+                self.last_error = str(exc)
+
+    @staticmethod
+    def _clip(value: float, limit: float) -> float:
+        return max(-limit, min(limit, float(value)))
+
+    def _sanitize_motion_value(self, value: float, limit: float) -> float:
+        clipped = self._clip(value, limit)
+        if abs(clipped) < self.motion_deadband:
+            return 0.0
+        return clipped
+
+    def _scaled_motion_value(self, key: str, value: float, limit: float) -> float:
+        scale = self.motion_scales.get(key, 1.0)
+        return self._sanitize_motion_value(float(value) * scale, limit)
+
+    @staticmethod
+    def _motion_is_zero(motion: dict) -> bool:
+        return (
+            abs(float(motion["linear_x"])) < 1e-9
+            and abs(float(motion["linear_y"])) < 1e-9
+            and abs(float(motion["angular_z"])) < 1e-9
+        )
+
+    def _feedback_looks_stale(self, command_motion: dict, feedback_motion: dict) -> bool:
+        return not self._motion_is_zero(command_motion) and self._motion_is_zero(feedback_motion)
+
+    @staticmethod
+    def _normalize_angle(value: float) -> float:
+        while value > math.pi:
+            value -= 2.0 * math.pi
+        while value < -math.pi:
+            value += 2.0 * math.pi
+        return value

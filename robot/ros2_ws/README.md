@@ -8,7 +8,11 @@ writer to `/dev/myserial`.
 The v1 assumptions are:
 
 - The lidar driver publishes `/scan`.
-- The SLAM node consumes `/scan` and publishes `/map`.
+- The direct-mode odom bridge inside `fleet-agent` publishes `/odom` and
+  `odom -> base_link` TF, preferring Rosmaster chassis motion feedback over
+  command integration.
+- The SLAM node consumes `/scan` plus the direct-mode `/odom`/`tf` stream and
+  publishes `/map`.
 - ROS-native tools may publish `/cmd_vel`, but execution still flows through
   `fleet-agent`'s direct-mode subscriber and arbiter.
 - The fleet-agent starts and stops these processes and saves maps.
@@ -26,7 +30,7 @@ src/peacekeeper_bringup/
 The v1 launch files:
 
 - `lidar.launch.py` includes `sllidar_ros2/sllidar_launch.py`.
-- `slam.launch.py` starts `yahboomcar_nav/slam_gmapping_X3`.
+- `slam.launch.py` forwards to `yahboomcar_nav/map_gmapping_a1_launch.py`.
 - `teleop_cmd_vel` publishes interactive keyboard `Twist` commands for testing
   the ROS control path without the web UI.
 - `topic_watchdog.py` reports whether `/cmd_vel`, `/scan`, and `/map` are active.

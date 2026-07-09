@@ -35,6 +35,8 @@ class ManagedProcess:
     started_at: Optional[float] = None
     error: Optional[str] = None
     handle: Optional[subprocess.Popen] = None
+    stdout_tail: str = ""
+    stderr_tail: str = ""
 
     def to_dict(self) -> dict:
         cpu = 0.0
@@ -55,6 +57,8 @@ class ManagedProcess:
             "cpu": cpu,
             "memory_mb": memory,
             "error": self.error,
+            "stdout_tail": self.stdout_tail,
+            "stderr_tail": self.stderr_tail,
         }
 
 
@@ -90,6 +94,8 @@ class ProcessManager:
 
             managed.status = ProcessStatus.STARTING
             managed.error = None
+            managed.stdout_tail = ""
+            managed.stderr_tail = ""
             try:
                 handle = subprocess.Popen(
                     ["bash", "-lc", self._bash_command(managed.config.command)],
@@ -164,6 +170,12 @@ class ProcessManager:
         if handle.poll() is None:
             managed.status = ProcessStatus.RUNNING
             return
+        try:
+            stdout, stderr = handle.communicate(timeout=0)
+        except Exception:
+            stdout, stderr = "", ""
+        managed.stdout_tail = self._tail_text(stdout)
+        managed.stderr_tail = self._tail_text(stderr)
         if managed.status not in (ProcessStatus.STOPPING, ProcessStatus.STOPPED):
             managed.status = ProcessStatus.ERROR
             managed.error = f"Exited with code {handle.returncode}"
@@ -193,3 +205,12 @@ class ProcessManager:
             managed.pid = None
             managed.handle = None
         managed.status = ProcessStatus.STOPPED
+
+    @staticmethod
+    def _tail_text(value: str, lines: int = 40, chars: int = 4000) -> str:
+        if not value:
+            return ""
+        text = str(value)
+        tail_lines = text.splitlines()[-lines:]
+        tail = "\n".join(tail_lines)
+        return tail[-chars:]

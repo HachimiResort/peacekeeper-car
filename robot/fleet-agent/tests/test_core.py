@@ -22,7 +22,7 @@ from fleet_agent.command_arbiter import CommandArbiter
 from fleet_agent.config import AgentConfig, ProcessConfig, SafetyConfig, load_config
 from fleet_agent.mapping import MappingService
 from fleet_agent.rosmaster_control import RosmasterController
-from fleet_agent.ros_control import CmdVelPublisher, DirectCmdVelSubscriber
+from fleet_agent.ros_control import CmdVelPublisher, DirectCmdVelSubscriber, DirectOdomPublisher
 from fleet_agent.state import Mode, RuntimeState
 from fleet_agent.video import VideoService
 
@@ -112,6 +112,21 @@ class FakeDirectSubscriber:
 
     def status(self):
         return {"available": True, "ready": self.start_count > self.shutdown_count}
+
+
+class FakeMotionSink:
+    def __init__(self):
+        self.commands = []
+        self.stop_count = 0
+
+    def update_command(self, linear_x, linear_y, angular_z, ttl_ms=None):
+        self.commands.append((linear_x, linear_y, angular_z, ttl_ms))
+
+    def stop(self):
+        self.stop_count += 1
+
+    def status(self):
+        return {"ready": True}
 
 
 def tracking_config():
@@ -231,6 +246,109 @@ class CoreTests(unittest.TestCase):
         self.assertIn(("run", 5, 25), fake.calls)
         controller.shutdown()
 
+    def test_rosmaster_backend_exposes_motion_feedback(self):
+        class FakeBot:
+            def __init__(self):
+                self.receive_thread_started = False
+
+            def create_receive_threading(self):
+                self.receive_thread_started = True
+
+            def set_car_run(self, state, speed):
+                del state, speed
+
+            def set_car_motion(self, x, y, z):
+                del x, y, z
+
+            def set_motor(self, a, b, c, d):
+                del a, b, c, d
+
+            def set_beep(self, value):
+                del value
+
+            def get_motion_data(self):
+                return (0.12, -0.03, 0.4)
+
+        controller = RosmasterController(
+            AgentConfig().control,
+            AgentConfig().safety,
+            bot_factory=FakeBot,
+        )
+
+        motion = controller.read_motion()
+
+        self.assertEqual(motion, {"linear_x": 0.12, "linear_y": -0.03, "angular_z": 0.4})
+        self.assertTrue(controller.status()["motion_feedback_available"])
+        self.assertTrue(controller.status()["feedback_thread_started"])
+        controller.shutdown()
+
+    def test_direct_odom_prefers_feedback_motion_over_command_integration(self):
+        class FakeFeedbackSource:
+            def read_motion(self):
+                return {"linear_x": 0.05, "linear_y": 0.0, "angular_z": 0.0}
+
+        odom = DirectOdomPublisher(
+            "/odom",
+            "odom",
+            "base_link",
+            AgentConfig().safety,
+            feedback_source=FakeFeedbackSource(),
+        )
+        odom.update_command(0.2, 0.0, 0.0, ttl_ms=500)
+
+        with odom.lock:
+            motion = odom._resolve_motion_unlocked()
+            odom._integrate_pose(1.0, motion)
+
+        self.assertEqual(odom.motion_source, "feedback")
+        self.assertEqual(motion["linear_x"], 0.05)
+        self.assertAlmostEqual(odom.x, 0.05, places=6)
+
+    def test_direct_odom_falls_back_to_command_when_feedback_fails(self):
+        class BrokenFeedbackSource:
+            def read_motion(self):
+                raise RuntimeError("feedback offline")
+
+        odom = DirectOdomPublisher(
+            "/odom",
+            "odom",
+            "base_link",
+            AgentConfig().safety,
+            feedback_source=BrokenFeedbackSource(),
+        )
+        odom.update_command(0.2, 0.0, 0.0, ttl_ms=500)
+
+        with odom.lock:
+            motion = odom._resolve_motion_unlocked()
+
+        self.assertEqual(odom.motion_source, "command_fallback")
+        self.assertEqual(motion["linear_x"], 0.2)
+        self.assertIn("feedback offline", odom.last_error)
+
+    def test_direct_odom_falls_back_to_command_when_feedback_stays_zero(self):
+        class ZeroFeedbackSource:
+            def read_motion(self):
+                return {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
+
+        odom = DirectOdomPublisher(
+            "/odom",
+            "odom",
+            "base_link",
+            AgentConfig().safety,
+            feedback_source=ZeroFeedbackSource(),
+            period_s=0.05,
+        )
+        odom.update_command(0.2, 0.0, 0.0, ttl_ms=500)
+
+        with odom.lock:
+            odom._feedback_zero_since = time.monotonic() - 0.3
+            motion = odom._resolve_motion_unlocked()
+
+        self.assertEqual(odom.motion_source, "command_fallback_stale_feedback")
+        self.assertEqual(motion["linear_x"], 0.2)
+        self.assertEqual(odom.last_feedback["linear_x"], 0.0)
+        self.assertIn("falling back to commanded motion", odom.last_error)
+
     def test_arbiter_rejects_ros_cmd_vel_until_mode_is_enabled(self):
         controller = FakeMotionController()
         state = RuntimeState()
@@ -260,6 +378,18 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(ros["ok"])
         self.assertEqual(state.mode, Mode.MANUAL)
         self.assertEqual(controller.published, [(0.2, 0.0, 0.0, 700)])
+
+    def test_arbiter_notifies_motion_sink_and_stop(self):
+        controller = FakeMotionController()
+        sink = FakeMotionSink()
+        state = RuntimeState()
+        arbiter = CommandArbiter(controller, state, AgentConfig().safety, motion_sink=sink)
+
+        arbiter.handle_manual_command(0.2, 0.1, 0.0, ttl_ms=600)
+        arbiter.stop()
+
+        self.assertEqual(sink.commands, [(0.2, 0.1, 0.0, 600)])
+        self.assertEqual(sink.stop_count, 1)
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_tracking_mode_rejects_nonzero_manual_cmd(self):
@@ -304,14 +434,34 @@ class CoreTests(unittest.TestCase):
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
                 patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
             with TestClient(app) as client:
                 response = client.post("/api/tracking/laser/start")
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(fake_pm.started, ["lidar", "laser_tracker"])
                 self.assertEqual(fake_subscriber.start_count, 1)
+
+    @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
+    def test_mapping_save_rejects_when_map_topic_is_inactive(self):
+        config = tracking_config()
+        config.processes["slam"] = ProcessConfig(name="slam", command="slam")
+        fake_pm = FakeManagedProcessManager(config)
+        fake_controller = FakeMotionController()
+        fake_subscriber = FakeDirectSubscriber()
+        with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
+                patch.object(app_module, "RosmasterController", return_value=fake_controller), \
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
+            app = app_module.create_app(config)
+            with TestClient(app) as client:
+                response = client.post("/api/mapping/save", json={"name": "lab"})
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("/map is not active", response.json()["message"])
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_direct_cmd_vel_subscriber_forwards_twist_to_controller(self):

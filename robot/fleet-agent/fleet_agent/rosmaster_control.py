@@ -29,6 +29,9 @@ class RosmasterController:
         self.last_command = {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
         self.last_state = 0
         self.last_speed = self._speed()
+        self.last_feedback = {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
+        self.last_feedback_error: Optional[str] = None
+        self.feedback_thread_started = False
         self.last_publish_ok = False
         self._stop_event = threading.Event()
         self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True)
@@ -44,6 +47,9 @@ class RosmasterController:
                 from Rosmaster_Lib import Rosmaster
 
                 self.bot = Rosmaster(com=self.control.rosmaster_port, debug=False)
+            if hasattr(self.bot, "create_receive_threading"):
+                self.bot.create_receive_threading()
+                self.feedback_thread_started = True
             self._stop_unlocked()
 
     def publish(self, linear_x: float, linear_y: float, angular_z: float, ttl_ms: Optional[int] = None) -> None:
@@ -92,6 +98,28 @@ class RosmasterController:
         except Exception:
             pass
 
+    def read_motion(self) -> dict:
+        self.start()
+        with self.lock:
+            if self.bot is None or not hasattr(self.bot, "get_motion_data"):
+                self.last_feedback_error = "Rosmaster motion feedback is not available"
+                raise RuntimeError(self.last_feedback_error)
+            try:
+                values = tuple(self.bot.get_motion_data())
+                if len(values) != 3:
+                    raise RuntimeError(f"Unexpected motion feedback payload: {values!r}")
+                motion = {
+                    "linear_x": float(values[0]),
+                    "linear_y": float(values[1]),
+                    "angular_z": float(values[2]),
+                }
+                self.last_feedback = motion
+                self.last_feedback_error = None
+                return motion
+            except Exception as exc:
+                self.last_feedback_error = str(exc)
+                raise
+
     def status(self) -> dict:
         return {
             "available": self.bot is not None,
@@ -104,6 +132,10 @@ class RosmasterController:
             "last_command": dict(self.last_command),
             "last_state": self.last_state,
             "last_speed": self.last_speed,
+            "motion_feedback_available": self.bot is not None and hasattr(self.bot, "get_motion_data"),
+            "feedback_thread_started": self.feedback_thread_started,
+            "last_feedback": dict(self.last_feedback),
+            "last_feedback_error": self.last_feedback_error,
             "ttl_active": self.deadline is not None and time.monotonic() < self.deadline,
             "port": self.control.rosmaster_port,
             "motion_mode": self.control.direct_motion_mode,

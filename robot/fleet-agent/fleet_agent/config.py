@@ -18,6 +18,16 @@ class RosConfig:
     cmd_vel_topic: str = "/cmd_vel"
     scan_topic: str = "/scan"
     map_topic: str = "/map"
+    odom_topic: str = "/odom"
+    odom_frame: str = "odom"
+    base_frame: str = "base_footprint"
+    base_link_frame: str = "base_link"
+    publish_odom: bool = True
+    publish_tf: bool = True
+    odom_period_s: float = 0.05
+    odom_linear_x_scale: float = 1.0
+    odom_linear_y_scale: float = 1.0
+    odom_angular_z_scale: float = 1.0
     mock_cmd_vel: bool = False
 
 
@@ -57,7 +67,10 @@ class ProcessConfig:
 
 @dataclass
 class MappingConfig:
-    saver_command: str = "ros2 run nav2_map_server map_saver_cli -f {map_path}"
+    saver_command: str = (
+        "ros2 run nav2_map_server map_saver_cli "
+        "-f {map_path} --ros-args -p save_map_timeout:=120000"
+    )
 
 
 @dataclass
@@ -74,11 +87,15 @@ class AgentConfig:
         default_factory=lambda: {
             "lidar": ProcessConfig(
                 name="lidar",
-                command="ros2 launch sllidar_ros2 sllidar_launch.py",
+                command=(
+                    "bash -lc 'ros2 launch sllidar_ros2 sllidar_launch.py & "
+                    "ros2 run tf2_ros static_transform_publisher "
+                    "-0.0455 5.258E-05 0.3059 3.14 0 0 base_link laser & wait'"
+                ),
             ),
             "slam": ProcessConfig(
                 name="slam",
-                command="ros2 run yahboomcar_nav slam_gmapping_X3",
+                command="ros2 launch slam_gmapping slam_gmapping.launch.py",
             ),
         }
     )

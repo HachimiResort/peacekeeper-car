@@ -6,6 +6,7 @@ import json
 from functools import partial
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -15,7 +16,7 @@ from .command_arbiter import CommandArbiter
 from .config import AgentConfig
 from .mapping import MappingService
 from .process_manager import ProcessManager
-from .ros_control import DirectCmdVelSubscriber
+from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher
 from .rosmaster_control import RosmasterController
 from .schemas import CmdVelRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
@@ -36,13 +37,30 @@ def create_app(config: AgentConfig) -> FastAPI:
     (data_dir / "maps").mkdir(parents=True, exist_ok=True)
     (data_dir / "logs").mkdir(parents=True, exist_ok=True)
 
-    process_manager = ProcessManager(config)
     rosmaster = RosmasterController(config.control, config.safety)
+    direct_odom = DirectOdomPublisher(
+        config.ros.odom_topic,
+        config.ros.odom_frame,
+        config.ros.base_frame,
+        config.safety,
+        setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
+        feedback_source=rosmaster,
+        publish_odom=config.ros.publish_odom,
+        publish_tf=config.ros.publish_tf,
+        period_s=config.ros.odom_period_s,
+        motion_deadband=config.control.direct_deadband,
+        base_link_frame=config.ros.base_link_frame,
+        linear_x_scale=config.ros.odom_linear_x_scale,
+        linear_y_scale=config.ros.odom_linear_y_scale,
+        angular_z_scale=config.ros.odom_angular_z_scale,
+    )
+    process_manager = ProcessManager(config)
     cmd_vel = CommandArbiter(
         rosmaster,
         state,
         config.safety,
         manual_override_s=config.control.manual_override_s,
+        motion_sink=direct_odom,
     )
     direct_cmd_vel = DirectCmdVelSubscriber(
         config.ros.cmd_vel_topic,
@@ -60,6 +78,10 @@ def create_app(config: AgentConfig) -> FastAPI:
             process_manager.start_auto_processes()
         except Exception as exc:
             state.set_error(f"Auto-start failed: {exc}")
+        try:
+            direct_odom.start()
+        except Exception as exc:
+            state.set_error(f"Direct odom bridge failed: {exc}")
         if direct_cmd_vel is not None:
             try:
                 direct_cmd_vel.start()
@@ -68,6 +90,7 @@ def create_app(config: AgentConfig) -> FastAPI:
         try:
             yield
         finally:
+            direct_odom.shutdown()
             if direct_cmd_vel is not None:
                 direct_cmd_vel.shutdown()
             cmd_vel.shutdown()
@@ -84,10 +107,12 @@ def create_app(config: AgentConfig) -> FastAPI:
     def build_status() -> dict:
         process_status = process_manager.status()
         ros_status = cmd_vel.status()
+        ros_status["direct_odom_bridge"] = direct_odom.status()
         if direct_cmd_vel is not None:
             ros_status["direct_cmd_vel_subscriber"] = direct_cmd_vel.status()
         ros_status.update(
             {
+                "odom_active": process_manager.topic_active(config.ros.odom_topic),
                 "scan_active": process_manager.topic_active(config.ros.scan_topic),
                 "map_active": process_manager.topic_active(config.ros.map_topic),
             }
@@ -174,6 +199,28 @@ def create_app(config: AgentConfig) -> FastAPI:
     async def video_sample_jpg():
         frame = await _run_blocking(video.read_jpeg)
         return Response(frame, media_type="image/jpeg")
+
+    @app.get("/api/mapping/latest")
+    async def mapping_latest(name: Optional[str] = Query(default=None)):
+        try:
+            info = await _run_blocking(mapping.latest_map, name)
+            return JSONResponse({"ok": True, **info})
+        except FileNotFoundError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
+
+    @app.get("/api/mapping/preview.png")
+    async def mapping_preview_png(name: Optional[str] = Query(default=None)):
+        try:
+            image = await _run_blocking(mapping.render_map_png, name)
+            return Response(image, media_type="image/png")
+        except FileNotFoundError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
 
     @app.post("/api/control/cmd_vel")
     async def control_cmd_vel(payload: CmdVelRequest):

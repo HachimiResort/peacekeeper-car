@@ -79,6 +79,46 @@
       border-radius: 6px;
       font-size: 13px;
     }
+    .display-switch {
+      position: absolute;
+      right: 12px;
+      top: 12px;
+      display: flex;
+      gap: 8px;
+      z-index: 2;
+    }
+    .display-switch button {
+      min-height: 32px;
+      min-width: 88px;
+      background: rgba(0,0,0,.55);
+      border-color: rgba(255,255,255,.18);
+    }
+    .display-switch button.active {
+      background: #1c5f49;
+      border-color: #2b8769;
+    }
+    .odom-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background:
+        linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px),
+        radial-gradient(circle at center, rgba(53,196,143,.08), rgba(0,0,0,0) 55%),
+        #050607;
+      background-size: 40px 40px, 40px 40px, auto, auto;
+    }
+    .odom-overlay {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      padding: 8px 10px;
+      background: rgba(0,0,0,.55);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
     aside {
       display: flex;
       flex-direction: column;
@@ -170,9 +210,21 @@
     <div class="video-wrap">
       <div id="samplePlaceholder" class="sample-placeholder">No camera sample</div>
       <img id="sampleFrame" alt="Camera sample" hidden>
+      <img id="mapFrame" alt="Saved map preview" hidden>
+      <canvas id="odomCanvas" class="odom-canvas" hidden></canvas>
+      <div class="display-switch">
+        <button id="showCameraView" class="active">Camera</button>
+        <button id="showMapView">Map</button>
+        <button id="showOdomView">Odom</button>
+      </div>
       <div class="hud">
         <div>Run: {{ run_id }}</div>
         <div id="sampleTime">Sample: never</div>
+        <div id="mapTime">Map: none</div>
+      </div>
+      <div id="odomOverlay" class="odom-overlay" hidden>
+        <div id="odomMeta">Odom: waiting for status</div>
+        <div id="odomPose">x=0.00 y=0.00 yaw=0.0°</div>
       </div>
     </div>
     <aside>
@@ -200,6 +252,10 @@
         </div>
         <div style="margin-top: 8px;">
           <input id="mapName" type="text" value="lab_first_map" aria-label="Map name">
+        </div>
+        <div class="grid" style="margin-top: 8px;">
+          <button id="refreshMapView" class="wide">Show Latest Saved Map</button>
+          <button id="resetOdomView" class="wide">Reset Odom Trace</button>
         </div>
       </section>
       <section>
@@ -237,14 +293,171 @@
     const modeEl = document.getElementById("mode");
     const dotEl = document.getElementById("ws-dot");
     const sampleFrame = document.getElementById("sampleFrame");
+    const mapFrame = document.getElementById("mapFrame");
+    const odomCanvas = document.getElementById("odomCanvas");
+    const odomOverlay = document.getElementById("odomOverlay");
+    const odomMeta = document.getElementById("odomMeta");
+    const odomPose = document.getElementById("odomPose");
     const samplePlaceholder = document.getElementById("samplePlaceholder");
     const sampleTime = document.getElementById("sampleTime");
+    const mapTime = document.getElementById("mapTime");
+    const showCameraViewButton = document.getElementById("showCameraView");
+    const showMapViewButton = document.getElementById("showMapView");
+    const showOdomViewButton = document.getElementById("showOdomView");
     const activeKeys = new Set();
     const motionTtlMs = 1500;
     const motionPeriodMs = 100;
     let activeDir = "stop";
     let commandTimer = null;
     let motionInFlight = false;
+    let displayMode = "camera";
+    let latestMapName = "";
+    let odomTrail = [];
+    let lastPoseSignature = "";
+    let lastRunId = "{{ run_id }}";
+
+    function resizeOdomCanvas() {
+      const rect = odomCanvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(rect.width * ratio));
+      const height = Math.max(1, Math.round(rect.height * ratio));
+      if (odomCanvas.width !== width || odomCanvas.height !== height) {
+        odomCanvas.width = width;
+        odomCanvas.height = height;
+      }
+    }
+
+    function resetOdomTrace() {
+      odomTrail = [];
+      lastPoseSignature = "";
+      drawOdomView();
+    }
+
+    function formatYawDeg(yaw) {
+      return (yaw * 180 / Math.PI).toFixed(1);
+    }
+
+    function updateOdomView(status) {
+      const bridge = status?.ros?.direct_odom_bridge;
+      if (!bridge || !bridge.pose) {
+        odomMeta.textContent = "Odom: not available";
+        odomPose.textContent = "x=0.00 y=0.00 yaw=0.0°";
+        drawOdomView();
+        return;
+      }
+      if (status.run_id !== lastRunId) {
+        lastRunId = status.run_id;
+        resetOdomTrace();
+      }
+      const pose = bridge.pose;
+      const point = {
+        x: Number(pose.x || 0),
+        y: Number(pose.y || 0),
+        yaw: Number(pose.yaw || 0)
+      };
+      const signature = `${point.x.toFixed(3)},${point.y.toFixed(3)},${point.yaw.toFixed(3)}`;
+      if (signature !== lastPoseSignature) {
+        const previous = odomTrail.length ? odomTrail[odomTrail.length - 1] : null;
+        const movedEnough = !previous || Math.hypot(point.x - previous.x, point.y - previous.y) > 0.02 || Math.abs(point.yaw - previous.yaw) > 0.03;
+        if (movedEnough) {
+          odomTrail.push(point);
+          if (odomTrail.length > 1200) odomTrail.shift();
+        }
+        lastPoseSignature = signature;
+      }
+      odomMeta.textContent = `Odom: ${bridge.motion_source || "unknown"} | samples ${odomTrail.length}`;
+      odomPose.textContent = `x=${point.x.toFixed(2)} y=${point.y.toFixed(2)} yaw=${formatYawDeg(point.yaw)}°`;
+      drawOdomView();
+    }
+
+    function drawOdomView() {
+      resizeOdomCanvas();
+      const ctx = odomCanvas.getContext("2d");
+      const width = odomCanvas.width;
+      const height = odomCanvas.height;
+      ctx.clearRect(0, 0, width, height);
+
+      if (!odomTrail.length) {
+        ctx.fillStyle = "rgba(238,242,244,0.75)";
+        ctx.font = `${Math.max(18, Math.round(width / 40))}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText("Waiting for odom pose", width / 2, height / 2);
+        return;
+      }
+
+      let minX = odomTrail[0].x;
+      let maxX = odomTrail[0].x;
+      let minY = odomTrail[0].y;
+      let maxY = odomTrail[0].y;
+      for (const point of odomTrail) {
+        minX = Math.min(minX, point.x);
+        maxX = Math.max(maxX, point.x);
+        minY = Math.min(minY, point.y);
+        maxY = Math.max(maxY, point.y);
+      }
+
+      const padding = Math.max(40, Math.round(Math.min(width, height) * 0.08));
+      const spanX = Math.max(maxX - minX, 1.0);
+      const spanY = Math.max(maxY - minY, 1.0);
+      const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY);
+      const centerX = (minX + maxX) * 0.5;
+      const centerY = (minY + maxY) * 0.5;
+
+      function project(point) {
+        return {
+          x: width * 0.5 + (point.x - centerX) * scale,
+          y: height * 0.5 - (point.y - centerY) * scale
+        };
+      }
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(width * 0.5, 0);
+      ctx.lineTo(width * 0.5, height);
+      ctx.moveTo(0, height * 0.5);
+      ctx.lineTo(width, height * 0.5);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.strokeStyle = "#35c48f";
+      ctx.lineWidth = Math.max(2, Math.round(width / 280));
+      ctx.beginPath();
+      odomTrail.forEach((point, index) => {
+        const projected = project(point);
+        if (index === 0) ctx.moveTo(projected.x, projected.y);
+        else ctx.lineTo(projected.x, projected.y);
+      });
+      ctx.stroke();
+      ctx.restore();
+
+      const start = project(odomTrail[0]);
+      const current = project(odomTrail[odomTrail.length - 1]);
+
+      ctx.save();
+      ctx.fillStyle = "#f3b33d";
+      ctx.beginPath();
+      ctx.arc(start.x, start.y, Math.max(4, Math.round(width / 120)), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.save();
+      ctx.translate(current.x, current.y);
+      ctx.rotate(-odomTrail[odomTrail.length - 1].yaw);
+      ctx.fillStyle = "#ff5a5f";
+      ctx.beginPath();
+      ctx.moveTo(Math.max(12, width / 40), 0);
+      ctx.lineTo(-Math.max(9, width / 55), Math.max(7, width / 80));
+      ctx.lineTo(-Math.max(5, width / 95), 0);
+      ctx.lineTo(-Math.max(9, width / 55), -Math.max(7, width / 80));
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
 
     function payloadFor(dir) {
       const v = Number(speed.value);
@@ -278,8 +491,71 @@
         body: JSON.stringify(body)
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || res.statusText);
+      if (!res.ok) {
+        const err = new Error(data.message || data.stderr || res.statusText);
+        err.payload = data;
+        throw err;
+      }
       return data;
+    }
+
+    function setDisplayMode(mode) {
+      displayMode = mode;
+      const showingCamera = mode === "camera";
+      showCameraViewButton.classList.toggle("active", showingCamera);
+      showMapViewButton.classList.toggle("active", mode === "map");
+      showOdomViewButton.classList.toggle("active", mode === "odom");
+      if (showingCamera) {
+        const hasCamera = !sampleFrame.hidden;
+        sampleFrame.hidden = !hasCamera;
+        mapFrame.hidden = true;
+        odomCanvas.hidden = true;
+        odomOverlay.hidden = true;
+        samplePlaceholder.hidden = hasCamera;
+        if (!hasCamera) samplePlaceholder.textContent = "No camera sample";
+      } else if (mode === "map") {
+        const hasMap = !mapFrame.hidden;
+        mapFrame.hidden = !hasMap;
+        sampleFrame.hidden = true;
+        odomCanvas.hidden = true;
+        odomOverlay.hidden = true;
+        samplePlaceholder.hidden = hasMap;
+        if (!hasMap) samplePlaceholder.textContent = "No saved map preview";
+      } else {
+        sampleFrame.hidden = true;
+        mapFrame.hidden = true;
+        odomCanvas.hidden = false;
+        odomOverlay.hidden = false;
+        samplePlaceholder.hidden = true;
+        drawOdomView();
+      }
+    }
+
+    async function showMapPreview(name = "") {
+      const query = name ? `?name=${encodeURIComponent(name)}&t=${Date.now()}` : `?t=${Date.now()}`;
+      try {
+        const info = await fetch(`/api/mapping/latest${name ? `?name=${encodeURIComponent(name)}` : ""}`).then((res) => res.json());
+        if (!info.ok) throw new Error(info.message || "Map preview is not available");
+        latestMapName = info.name || name;
+        mapFrame.onload = () => {
+          samplePlaceholder.hidden = true;
+          sampleFrame.hidden = true;
+          mapFrame.hidden = false;
+          mapTime.textContent = `Map: ${latestMapName}`;
+          setDisplayMode("map");
+        };
+        mapFrame.onerror = () => {
+          mapFrame.hidden = true;
+          samplePlaceholder.hidden = false;
+          samplePlaceholder.textContent = "Map preview failed";
+        };
+        mapFrame.src = `/api/mapping/preview.png${query}`;
+      } catch (err) {
+        mapFrame.hidden = true;
+        samplePlaceholder.hidden = false;
+        samplePlaceholder.textContent = err.message || "No saved map preview";
+        setDisplayMode("map");
+      }
     }
 
     async function sendMotion() {
@@ -367,8 +643,18 @@
     document.getElementById("stopMapping").onclick = () => postJson("/api/mapping/stop").catch(alert);
     document.getElementById("saveMap").onclick = () => {
       const name = document.getElementById("mapName").value || "map";
-      postJson("/api/mapping/save", {name}).then((r) => alert(JSON.stringify(r, null, 2))).catch(alert);
+      postJson("/api/mapping/save", {name})
+        .then((r) => {
+          alert(JSON.stringify(r, null, 2));
+          showMapPreview(r.name || name);
+        })
+        .catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
     };
+    document.getElementById("refreshMapView").onclick = () => showMapPreview(document.getElementById("mapName").value || latestMapName);
+    document.getElementById("resetOdomView").onclick = resetOdomTrace;
+    showCameraViewButton.onclick = () => setDisplayMode("camera");
+    showMapViewButton.onclick = () => showMapPreview(document.getElementById("mapName").value || latestMapName);
+    showOdomViewButton.onclick = () => setDisplayMode("odom");
     document.getElementById("startLaserTracking").onclick = () => postJson("/api/tracking/laser/start").catch(alert);
     document.getElementById("stopLaserTracking").onclick = () => postJson("/api/tracking/laser/stop").catch(alert);
     document.getElementById("sampleCamera").onclick = () => {
@@ -376,7 +662,9 @@
       sampleFrame.onload = () => {
         samplePlaceholder.hidden = true;
         sampleFrame.hidden = false;
+        mapFrame.hidden = true;
         sampleTime.textContent = `Sample: ${now.toLocaleTimeString()}`;
+        setDisplayMode("camera");
       };
       sampleFrame.onerror = () => {
         sampleFrame.hidden = true;
@@ -403,6 +691,7 @@
         const data = message.data;
         modeEl.textContent = data.mode;
         statusEl.textContent = JSON.stringify(data, null, 2);
+        updateOdomView(data);
       };
       ws.onclose = () => {
         dotEl.classList.remove("online");
@@ -411,6 +700,7 @@
         setTimeout(connectWs, 1000);
       };
     }
+    window.addEventListener("resize", drawOdomView);
     connectWs();
   </script>
 </body>
