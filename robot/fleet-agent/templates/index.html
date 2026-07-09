@@ -166,7 +166,8 @@
       font-size: 13px;
     }
     input[type="range"] { width: 100%; }
-    input[type="text"] {
+    input[type="text"],
+    input[type="number"] {
       width: 100%;
       min-height: 36px;
       padding: 7px 9px;
@@ -174,6 +175,34 @@
       border: 1px solid var(--line);
       background: var(--panel-2);
       color: var(--text);
+    }
+    .map-click-marker {
+      position: absolute;
+      width: 24px;
+      height: 24px;
+      border: 2px solid #ff5a5f;
+      border-radius: 999px;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 3;
+      box-shadow: 0 0 0 2px rgba(0,0,0,.7);
+    }
+    .map-click-marker::before,
+    .map-click-marker::after {
+      content: "";
+      position: absolute;
+      background: #ff5a5f;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .map-click-marker::before { width: 34px; height: 2px; }
+    .map-click-marker::after { width: 2px; height: 34px; }
+    .nav-summary {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
     }
     pre {
       margin: 0;
@@ -211,6 +240,7 @@
       <div id="samplePlaceholder" class="sample-placeholder">No camera sample</div>
       <img id="sampleFrame" alt="Camera sample" hidden>
       <img id="mapFrame" alt="Saved map preview" hidden>
+      <div id="mapClickMarker" class="map-click-marker" hidden></div>
       <canvas id="odomCanvas" class="odom-canvas" hidden></canvas>
       <div class="display-switch">
         <button id="showCameraView" class="active">Camera</button>
@@ -259,6 +289,19 @@
         </div>
       </section>
       <section>
+        <h2>Navigation Demo</h2>
+        <label>Yaw deg <input id="navYawDeg" type="number" step="1" value="0"></label>
+        <div class="grid" style="margin-top: 8px;">
+          <button id="startNav2" class="primary wide">Start Nav2</button>
+          <button id="setInitialPose">Set Initial Pose</button>
+          <button id="sendNavGoal" class="primary">Send Goal</button>
+          <button id="cancelNavGoal" class="warn">Cancel Goal</button>
+          <button id="stopNav2" class="danger wide">Stop Nav2</button>
+        </div>
+        <div id="navSelected" class="nav-summary">Selected: click a saved map point</div>
+        <div id="navStatus" class="nav-summary">Nav2: idle</div>
+      </section>
+      <section>
         <h2>Laser Tracking</h2>
         <div class="grid">
           <button id="startLaserTracking" class="primary wide">Start Laser Tracking</button>
@@ -294,6 +337,7 @@
     const dotEl = document.getElementById("ws-dot");
     const sampleFrame = document.getElementById("sampleFrame");
     const mapFrame = document.getElementById("mapFrame");
+    const mapClickMarker = document.getElementById("mapClickMarker");
     const odomCanvas = document.getElementById("odomCanvas");
     const odomOverlay = document.getElementById("odomOverlay");
     const odomMeta = document.getElementById("odomMeta");
@@ -304,6 +348,9 @@
     const showCameraViewButton = document.getElementById("showCameraView");
     const showMapViewButton = document.getElementById("showMapView");
     const showOdomViewButton = document.getElementById("showOdomView");
+    const navYawDeg = document.getElementById("navYawDeg");
+    const navSelected = document.getElementById("navSelected");
+    const navStatus = document.getElementById("navStatus");
     const activeKeys = new Set();
     const motionTtlMs = 1500;
     const motionPeriodMs = 100;
@@ -312,6 +359,8 @@
     let motionInFlight = false;
     let displayMode = "camera";
     let latestMapName = "";
+    let mapMeta = null;
+    let selectedMapPoint = null;
     let odomTrail = [];
     let lastPoseSignature = "";
     let lastRunId = "{{ run_id }}";
@@ -529,6 +578,112 @@
         samplePlaceholder.hidden = true;
         drawOdomView();
       }
+      updateMapMarkerVisibility();
+    }
+
+    function updateMapMarkerVisibility() {
+      mapClickMarker.hidden = !(displayMode === "map" && selectedMapPoint);
+    }
+
+    function activeMapName() {
+      return document.getElementById("mapName").value.trim() || latestMapName || "map";
+    }
+
+    async function loadMapMeta(name) {
+      const query = name ? `?name=${encodeURIComponent(name)}` : "";
+      const meta = await fetch(`/api/mapping/meta${query}`).then((res) => res.json());
+      if (!meta.ok) throw new Error(meta.message || "Map metadata is not available");
+      mapMeta = meta;
+      selectedMapPoint = null;
+      navSelected.textContent = `Selected: click map (${meta.width}x${meta.height}, ${meta.resolution} m/pixel)`;
+      updateMapMarkerVisibility();
+      return meta;
+    }
+
+    function mapImageLayout() {
+      const rect = mapFrame.getBoundingClientRect();
+      const imageWidth = mapFrame.naturalWidth || (mapMeta && mapMeta.width) || 0;
+      const imageHeight = mapFrame.naturalHeight || (mapMeta && mapMeta.height) || 0;
+      if (!rect.width || !rect.height || !imageWidth || !imageHeight) return null;
+      const scale = Math.min(rect.width / imageWidth, rect.height / imageHeight);
+      const width = imageWidth * scale;
+      const height = imageHeight * scale;
+      return {
+        rect,
+        imageWidth,
+        imageHeight,
+        scale,
+        offsetX: (rect.width - width) * 0.5,
+        offsetY: (rect.height - height) * 0.5,
+        width,
+        height,
+      };
+    }
+
+    function handleMapClick(event) {
+      if (!mapMeta || mapFrame.hidden) return;
+      const layout = mapImageLayout();
+      if (!layout) return;
+      const localX = event.clientX - layout.rect.left;
+      const localY = event.clientY - layout.rect.top;
+      if (
+        localX < layout.offsetX ||
+        localY < layout.offsetY ||
+        localX > layout.offsetX + layout.width ||
+        localY > layout.offsetY + layout.height
+      ) {
+        return;
+      }
+      const pixelX = (localX - layout.offsetX) / layout.scale;
+      const pixelY = (localY - layout.offsetY) / layout.scale;
+      const x = mapMeta.origin.x + (pixelX + 0.5) * mapMeta.resolution;
+      const y = mapMeta.origin.y + (mapMeta.height - pixelY - 0.5) * mapMeta.resolution;
+      selectedMapPoint = {pixelX, pixelY, x, y};
+      const wrapRect = document.querySelector(".video-wrap").getBoundingClientRect();
+      mapClickMarker.style.left = `${event.clientX - wrapRect.left}px`;
+      mapClickMarker.style.top = `${event.clientY - wrapRect.top}px`;
+      updateMapMarkerVisibility();
+      navSelected.textContent = `Selected: x=${x.toFixed(3)} y=${y.toFixed(3)} px=${pixelX.toFixed(1)},${pixelY.toFixed(1)}`;
+    }
+
+    function selectedNavigationPose() {
+      if (!selectedMapPoint) {
+        throw new Error("Click a point on the saved map first");
+      }
+      const yaw = Number(navYawDeg.value || 0) * Math.PI / 180;
+      return {
+        map_name: activeMapName(),
+        x: selectedMapPoint.x,
+        y: selectedMapPoint.y,
+        yaw,
+      };
+    }
+
+    async function startNavigationDemo() {
+      const name = activeMapName();
+      const result = await postJson("/api/navigation/start", {map_name: name});
+      navStatus.textContent = `Nav2: started on ${name}`;
+      await showMapPreview(name);
+      return result;
+    }
+
+    async function setNavigationInitialPose() {
+      const result = await postJson("/api/navigation/initial_pose", selectedNavigationPose());
+      navStatus.textContent = "Nav2: initial pose published";
+      return result;
+    }
+
+    async function sendNavigationGoal() {
+      const result = await postJson("/api/navigation/goal", selectedNavigationPose());
+      navStatus.textContent = "Nav2: goal sent";
+      return result;
+    }
+
+    function updateNavigationStatus(status) {
+      if (!status || !status.navigation) return;
+      const nav = status.navigation;
+      const map = nav.current_map || "none";
+      navStatus.textContent = `Nav2: ${nav.action_state || "idle"} | map ${map}`;
     }
 
     async function showMapPreview(name = "") {
@@ -537,6 +692,12 @@
         const info = await fetch(`/api/mapping/latest${name ? `?name=${encodeURIComponent(name)}` : ""}`).then((res) => res.json());
         if (!info.ok) throw new Error(info.message || "Map preview is not available");
         latestMapName = info.name || name;
+        loadMapMeta(latestMapName).catch((err) => {
+          mapMeta = null;
+          selectedMapPoint = null;
+          navSelected.textContent = `Selected: ${err.message}`;
+          updateMapMarkerVisibility();
+        });
         mapFrame.onload = () => {
           samplePlaceholder.hidden = true;
           sampleFrame.hidden = true;
@@ -552,6 +713,9 @@
         mapFrame.src = `/api/mapping/preview.png${query}`;
       } catch (err) {
         mapFrame.hidden = true;
+        mapMeta = null;
+        selectedMapPoint = null;
+        updateMapMarkerVisibility();
         samplePlaceholder.hidden = false;
         samplePlaceholder.textContent = err.message || "No saved map preview";
         setDisplayMode("map");
@@ -652,9 +816,15 @@
     };
     document.getElementById("refreshMapView").onclick = () => showMapPreview(document.getElementById("mapName").value || latestMapName);
     document.getElementById("resetOdomView").onclick = resetOdomTrace;
+    mapFrame.addEventListener("click", handleMapClick);
     showCameraViewButton.onclick = () => setDisplayMode("camera");
     showMapViewButton.onclick = () => showMapPreview(document.getElementById("mapName").value || latestMapName);
     showOdomViewButton.onclick = () => setDisplayMode("odom");
+    document.getElementById("startNav2").onclick = () => startNavigationDemo().catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("setInitialPose").onclick = () => setNavigationInitialPose().catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("sendNavGoal").onclick = () => sendNavigationGoal().catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("cancelNavGoal").onclick = () => postJson("/api/navigation/cancel").then(() => { navStatus.textContent = "Nav2: goal canceled"; }).catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("stopNav2").onclick = () => postJson("/api/navigation/stop").then(() => { navStatus.textContent = "Nav2: stopped"; }).catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
     document.getElementById("startLaserTracking").onclick = () => postJson("/api/tracking/laser/start").catch(alert);
     document.getElementById("stopLaserTracking").onclick = () => postJson("/api/tracking/laser/stop").catch(alert);
     document.getElementById("sampleCamera").onclick = () => {
@@ -692,6 +862,7 @@
         modeEl.textContent = data.mode;
         statusEl.textContent = JSON.stringify(data, null, 2);
         updateOdomView(data);
+        updateNavigationStatus(data);
       };
       ws.onclose = () => {
         dotEl.classList.remove("online");

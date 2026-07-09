@@ -20,6 +20,17 @@ class SaveMapRequest(BaseModel):
     name: str = Field(default="map", min_length=1, max_length=64)
 
 
+class NavigationStartRequest(BaseModel):
+    map_name: str = Field(default="map", min_length=1, max_length=64)
+
+
+class NavigationPoseRequest(BaseModel):
+    map_name: Optional[str] = Field(default=None, max_length=64)
+    x: float
+    y: float
+    yaw: float = 0.0
+
+
 class SnapshotResponse(BaseModel):
     ok: bool
     path: Optional[str] = None

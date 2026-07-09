@@ -74,6 +74,45 @@ class MappingService:
         width, height, pixels = self._read_pgm(Path(info["pgm"]))
         return self._encode_png(width, height, pixels)
 
+    def map_meta(self, name: Optional[str] = None) -> dict:
+        info = self.latest_map(name=name)
+        yaml_path = Path(info["yaml"])
+        pgm_path = Path(info["pgm"])
+        if not yaml_path.exists():
+            raise FileNotFoundError(f"Map metadata '{yaml_path.name}' was not found")
+        if not pgm_path.exists():
+            raise FileNotFoundError(f"Map image '{pgm_path.name}' was not found")
+
+        width, height, _ = self._read_pgm(pgm_path)
+        yaml_data = self._read_map_yaml(yaml_path)
+        origin = yaml_data.get("origin", [0.0, 0.0, 0.0])
+        if len(origin) < 3:
+            origin = list(origin) + [0.0] * (3 - len(origin))
+        resolution = float(yaml_data.get("resolution", 0.05))
+        return {
+            "name": info["name"],
+            "yaml": str(yaml_path),
+            "pgm": str(pgm_path),
+            "width": width,
+            "height": height,
+            "resolution": resolution,
+            "origin": {
+                "x": float(origin[0]),
+                "y": float(origin[1]),
+                "yaw": float(origin[2]),
+            },
+            "image": pgm_path.name,
+        }
+
+    @staticmethod
+    def pixel_to_map(meta: dict, pixel_x: float, pixel_y: float) -> Tuple[float, float]:
+        resolution = float(meta["resolution"])
+        origin = meta["origin"]
+        height = float(meta["height"])
+        map_x = float(origin["x"]) + (float(pixel_x) + 0.5) * resolution
+        map_y = float(origin["y"]) + (height - float(pixel_y) - 0.5) * resolution
+        return map_x, map_y
+
     @staticmethod
     def _safe_name(name: str) -> str:
         value = re.sub(r"[^A-Za-z0-9_.-]+", "_", name.strip())
@@ -150,6 +189,36 @@ class MappingService:
             chunk(b"IDAT", compressed),
             chunk(b"IEND", b""),
         ])
+
+    @staticmethod
+    def _read_map_yaml(path: Path) -> dict:
+        try:
+            import yaml  # type: ignore
+
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
+        data = {}
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if not line or ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+            if key == "origin":
+                numbers = re.findall(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value)
+                data[key] = [float(item) for item in numbers[:3]]
+            elif key in {"resolution", "occupied_thresh", "free_thresh"}:
+                data[key] = float(value)
+            elif key == "negate":
+                data[key] = int(value)
+            else:
+                data[key] = value.strip("'\"")
+        return data
 
     @staticmethod
     def _looks_like_timeout(result) -> bool:

@@ -15,10 +15,11 @@ from fastapi.templating import Jinja2Templates
 from .command_arbiter import CommandArbiter
 from .config import AgentConfig
 from .mapping import MappingService
+from .navigation import NavigationService
 from .process_manager import ProcessManager
 from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher
 from .rosmaster_control import RosmasterController
-from .schemas import CmdVelRequest, ProcessRequest, SaveMapRequest
+from .schemas import CmdVelRequest, NavigationPoseRequest, NavigationStartRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
 from .video import VideoService
 
@@ -69,6 +70,11 @@ def create_app(config: AgentConfig) -> FastAPI:
     )
     video = VideoService(config.video, run_dir)
     mapping = MappingService(config, process_manager)
+    navigation = NavigationService(
+        config,
+        process_manager,
+        setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
+    )
 
     templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
@@ -90,6 +96,7 @@ def create_app(config: AgentConfig) -> FastAPI:
         try:
             yield
         finally:
+            navigation.shutdown()
             direct_odom.shutdown()
             if direct_cmd_vel is not None:
                 direct_cmd_vel.shutdown()
@@ -125,6 +132,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             },
             "process_details": process_status,
             "video": video.status(),
+            "navigation": navigation.status(),
             "ros": ros_status,
             "last_error": state.last_error,
             "data_dir": str(data_dir),
@@ -222,6 +230,17 @@ def create_app(config: AgentConfig) -> FastAPI:
             state.set_error(str(exc))
             return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
 
+    @app.get("/api/mapping/meta")
+    async def mapping_meta(name: Optional[str] = Query(default=None)):
+        try:
+            info = await _run_blocking(mapping.map_meta, name)
+            return JSONResponse({"ok": True, **info})
+        except FileNotFoundError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
+
     @app.post("/api/control/cmd_vel")
     async def control_cmd_vel(payload: CmdVelRequest):
         return await publish_manual_command(payload)
@@ -235,6 +254,8 @@ def create_app(config: AgentConfig) -> FastAPI:
         if state.mode == Mode.LASER_TRACKING:
             return await stop_laser_tracking()
         try:
+            if state.mode == Mode.NAV_PATROL:
+                await _run_blocking(navigation.cancel_goal)
             await _run_blocking(cmd_vel.stop)
             if state.mode == Mode.MANUAL:
                 state.set_mode(Mode.IDLE)
@@ -246,6 +267,10 @@ def create_app(config: AgentConfig) -> FastAPI:
     @app.post("/api/control/estop")
     async def control_estop(stop_processes: bool = Query(default=True)):
         state.set_estop()
+        try:
+            await _run_blocking(navigation.cancel_goal)
+        except Exception:
+            pass
         try:
             await _run_blocking(cmd_vel.stop)
         except Exception:
@@ -287,11 +312,12 @@ def create_app(config: AgentConfig) -> FastAPI:
     @app.post("/api/process/stop_all")
     async def process_stop_all():
         try:
+            await _run_blocking(navigation.cancel_goal)
             await _run_blocking(cmd_vel.stop)
         except Exception:
             pass
         processes = await _run_blocking(process_manager.stop_all)
-        if state.mode == Mode.LASER_TRACKING:
+        if state.mode in (Mode.LASER_TRACKING, Mode.NAV_PATROL, Mode.MAPPING, Mode.SAVING_MAP):
             state.set_mode(Mode.IDLE)
         return {"ok": True, "processes": processes}
 
@@ -362,8 +388,99 @@ def create_app(config: AgentConfig) -> FastAPI:
         await _run_blocking(cmd_vel.stop)
         return {"ok": True, "mode": state.mode.value}
 
+    @app.post("/api/navigation/start")
+    async def navigation_start(payload: NavigationStartRequest):
+        if state.estop:
+            return JSONResponse({"ok": False, "message": "ESTOP is active"}, status_code=409)
+        if state.mode == Mode.LASER_TRACKING:
+            return JSONResponse(
+                {"ok": False, "message": "Laser tracking is active; stop tracking before navigation"},
+                status_code=409,
+            )
+        if state.mode in (Mode.MAPPING, Mode.SAVING_MAP):
+            return JSONResponse(
+                {"ok": False, "message": "Stop mapping before navigation"},
+                status_code=409,
+            )
+        process_status = await _run_blocking(process_manager.status)
+        slam_status = process_status.get("slam", {}).get("status")
+        if slam_status == "running":
+            return JSONResponse(
+                {"ok": False, "message": "SLAM is running; stop mapping before navigation"},
+                status_code=409,
+            )
+        try:
+            await _run_blocking(process_manager.start, "lidar")
+            if direct_cmd_vel is not None:
+                await _run_blocking(direct_cmd_vel.start)
+            status = await _run_blocking(navigation.start, payload.map_name)
+            return {"ok": True, "navigation": status}
+        except FileNotFoundError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
+
+    @app.post("/api/navigation/initial_pose")
+    async def navigation_initial_pose(payload: NavigationPoseRequest):
+        try:
+            result = await _run_blocking(navigation.publish_initial_pose, payload.x, payload.y, payload.yaw)
+            return result
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
+
+    @app.post("/api/navigation/goal")
+    async def navigation_goal(payload: NavigationPoseRequest):
+        if state.estop:
+            return JSONResponse({"ok": False, "message": "ESTOP is active"}, status_code=409)
+        try:
+            if direct_cmd_vel is not None:
+                await _run_blocking(direct_cmd_vel.start)
+            result = await _run_blocking(cmd_vel.enable_ros_cmd_vel, Mode.NAV_PATROL)
+            if not result["ok"]:
+                return JSONResponse(result, status_code=409)
+            goal = await _run_blocking(navigation.send_goal, payload.x, payload.y, payload.yaw)
+            return {"ok": True, "mode": state.mode.value, "navigation": goal}
+        except RuntimeError as exc:
+            await _run_blocking(cmd_vel.stop)
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+        except Exception as exc:
+            await _run_blocking(cmd_vel.stop)
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
+
+    @app.post("/api/navigation/cancel")
+    async def navigation_cancel():
+        result = await _run_blocking(navigation.cancel_goal)
+        await _run_blocking(cmd_vel.stop)
+        status_code = 200 if result.get("ok", False) else 500
+        return JSONResponse({"ok": result.get("ok", False), "mode": state.mode.value, "navigation": result}, status_code=status_code)
+
+    @app.post("/api/navigation/stop")
+    async def navigation_stop():
+        result = await _run_blocking(navigation.stop)
+        await _run_blocking(cmd_vel.stop)
+        return {"ok": True, "mode": state.mode.value, "navigation": result}
+
+    @app.get("/api/navigation/status")
+    async def navigation_status():
+        status = await _run_blocking(navigation.status)
+        return JSONResponse({"ok": True, **status})
+
     @app.post("/api/mapping/save")
     async def mapping_save(payload: SaveMapRequest):
+        map_active = await _run_blocking(process_manager.topic_active, config.ros.map_topic)
+        if not map_active:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "message": f"{config.ros.map_topic} is not active; start mapping and verify lidar, SLAM, and direct odom/tf are publishing first",
+                },
+                status_code=409,
+            )
         previous_mode = state.mode
         state.set_mode(Mode.SAVING_MAP)
         try:

@@ -21,6 +21,7 @@ except Exception:  # pragma: no cover - depends on optional local test deps
 from fleet_agent.command_arbiter import CommandArbiter
 from fleet_agent.config import AgentConfig, ProcessConfig, SafetyConfig, load_config
 from fleet_agent.mapping import MappingService
+from fleet_agent.navigation import NavigationService
 from fleet_agent.rosmaster_control import RosmasterController
 from fleet_agent.ros_control import CmdVelPublisher, DirectCmdVelSubscriber, DirectOdomPublisher
 from fleet_agent.state import Mode, RuntimeState
@@ -129,6 +130,56 @@ class FakeMotionSink:
         return {"ready": True}
 
 
+class FakeNavigationService:
+    last_instance = None
+
+    def __init__(self, *args, **kwargs):
+        del args, kwargs
+        self.current_map_name = None
+        self.cancel_count = 0
+        self.stop_count = 0
+        FakeNavigationService.last_instance = self
+
+    def start(self, map_name):
+        if map_name == "missing":
+            raise FileNotFoundError("Map 'missing' was not found")
+        self.current_map_name = map_name
+        return self.status()
+
+    def publish_initial_pose(self, x, y, yaw):
+        if not self.current_map_name:
+            raise RuntimeError("Nav2 is not running; call /api/navigation/start first")
+        return {"ok": True, "initial_pose": {"x": x, "y": y, "yaw": yaw}}
+
+    def send_goal(self, x, y, yaw):
+        if not self.current_map_name:
+            raise RuntimeError("Nav2 is not running; call /api/navigation/start first")
+        return {"ok": True, "goal": {"x": x, "y": y, "yaw": yaw}}
+
+    def cancel_goal(self):
+        self.cancel_count += 1
+        return {"ok": True, "action_state": "canceled"}
+
+    def stop(self):
+        self.stop_count += 1
+        self.current_map_name = None
+        return self.status()
+
+    def status(self):
+        return {
+            "process": None,
+            "current_map": self.current_map_name,
+            "current_goal": None,
+            "action_state": "running" if self.current_map_name else "idle",
+            "last_error": None,
+            "ready": bool(self.current_map_name),
+            "spin_thread_alive": False,
+        }
+
+    def shutdown(self):
+        return None
+
+
 def tracking_config():
     config = AgentConfig()
     config.processes = {
@@ -180,6 +231,34 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(Path(result["yaml"]).exists())
             self.assertTrue(Path(result["pgm"]).exists())
             self.assertIn("bad_name", fake_pm.commands[0])
+
+    def test_mapping_meta_reads_yaml_pgm_and_converts_pixels(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            maps_dir = Path(temp_dir) / "maps"
+            maps_dir.mkdir()
+            (maps_dir / "lab.yaml").write_text(
+                "image: lab.pgm\nresolution: 0.05\norigin: [-10.0, -20.0, 0.0]\n",
+                encoding="utf-8",
+            )
+            (maps_dir / "lab.pgm").write_text("P2\n2 2\n255\n0 255\n255 0\n", encoding="utf-8")
+            service = MappingService(AgentConfig(data_dir=temp_dir), FakeProcessManager())
+
+            meta = service.map_meta("lab")
+            map_x, map_y = MappingService.pixel_to_map(meta, 0, 0)
+
+            self.assertEqual(meta["width"], 2)
+            self.assertEqual(meta["height"], 2)
+            self.assertEqual(meta["resolution"], 0.05)
+            self.assertAlmostEqual(map_x, -9.975)
+            self.assertAlmostEqual(map_y, -19.925)
+
+    def test_navigation_start_requires_existing_map(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = AgentConfig(data_dir=temp_dir)
+            service = NavigationService(config, FakeManagedProcessManager(config), ("", ""))
+
+            with self.assertRaises(FileNotFoundError):
+                service.start("missing")
 
     def test_rosmaster_backend_uses_continuous_motion_by_default(self):
         class FakeBot:
@@ -462,6 +541,63 @@ class CoreTests(unittest.TestCase):
                 response = client.post("/api/mapping/save", json={"name": "lab"})
                 self.assertEqual(response.status_code, 409)
                 self.assertIn("/map is not active", response.json()["message"])
+
+    @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
+    def test_navigation_start_missing_map_returns_404(self):
+        config = tracking_config()
+        fake_pm = FakeManagedProcessManager(config)
+        fake_controller = FakeMotionController()
+        fake_subscriber = FakeDirectSubscriber()
+        with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
+                patch.object(app_module, "RosmasterController", return_value=fake_controller), \
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "NavigationService", FakeNavigationService):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
+            app = app_module.create_app(config)
+            with TestClient(app) as client:
+                response = client.post("/api/navigation/start", json={"map_name": "missing"})
+                self.assertEqual(response.status_code, 404)
+
+    @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
+    def test_navigation_goal_rejects_when_nav2_not_started(self):
+        config = tracking_config()
+        fake_pm = FakeManagedProcessManager(config)
+        fake_controller = FakeMotionController()
+        fake_subscriber = FakeDirectSubscriber()
+        with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
+                patch.object(app_module, "RosmasterController", return_value=fake_controller), \
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "NavigationService", FakeNavigationService):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
+            app = app_module.create_app(config)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/navigation/goal",
+                    json={"map_name": "lab", "x": 1.0, "y": 2.0, "yaw": 0.0},
+                )
+                self.assertEqual(response.status_code, 409)
+                self.assertGreaterEqual(fake_controller.stop_count, 1)
+
+    @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
+    def test_navigation_cancel_calls_action_cancel_and_stop(self):
+        config = tracking_config()
+        fake_pm = FakeManagedProcessManager(config)
+        fake_controller = FakeMotionController()
+        fake_subscriber = FakeDirectSubscriber()
+        with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
+                patch.object(app_module, "RosmasterController", return_value=fake_controller), \
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "NavigationService", FakeNavigationService):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
+            app = app_module.create_app(config)
+            with TestClient(app) as client:
+                response = client.post("/api/navigation/cancel")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(FakeNavigationService.last_instance.cancel_count, 1)
+                self.assertGreaterEqual(fake_controller.stop_count, 1)
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_direct_cmd_vel_subscriber_forwards_twist_to_controller(self):

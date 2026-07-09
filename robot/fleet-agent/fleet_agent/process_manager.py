@@ -116,6 +116,18 @@ class ProcessManager:
                 managed.error = str(exc)
                 raise
 
+    def start_dynamic(self, key: str, name: str, command: str) -> dict:
+        """Start a runtime-defined process using the normal ROS shell environment."""
+        with self.lock:
+            if key not in self.processes:
+                self.processes[key] = ManagedProcess(
+                    key=key,
+                    config=ProcessConfig(name=name, command=command),
+                )
+            else:
+                self.processes[key].config = ProcessConfig(name=name, command=command)
+            return self.start(key)
+
     def stop(self, key: str, timeout_s: float = 4.0) -> dict:
         with self.lock:
             if key not in self.processes:
