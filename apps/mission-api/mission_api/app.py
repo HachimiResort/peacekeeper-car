@@ -20,6 +20,7 @@ from .repositories import MissionRepository
 from .runtime import StatusAggregator, WebSocketHub
 from .security import verify_http_token, verify_websocket_token
 from .seed import seed_robots
+from .schemas import ErrorResponse
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await agent.close()
             await db.close()
 
-    app = FastAPI(title="Peacekeeper Mission API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Peacekeeper Mission API",
+        version="0.1.0",
+        lifespan=lifespan,
+        responses={
+            401: {"model": ErrorResponse, "description": "Missing or invalid shared token"},
+            409: {"model": ErrorResponse, "description": "Operation conflicts with current state"},
+            422: {"model": ErrorResponse, "description": "Request validation failed"},
+            500: {"model": ErrorResponse, "description": "Unexpected service error"},
+        },
+    )
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):

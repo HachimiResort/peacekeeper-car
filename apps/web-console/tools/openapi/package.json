@@ -1,0 +1,12 @@
+{
+  "name": "peacekeeper-openapi-generator",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "openapi-typescript ../../../mission-api/openapi.json -o ../../src/api/generated.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0",
+    "typescript": "~5.9.3"
+  }
+}

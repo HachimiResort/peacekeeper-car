@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..dependencies import get_session
 from ..errors import ApiError
 from ..models import Alert, Event, MapDeployment, Mission, Robot, StoredMap
-from ..repositories import EventRepository, RobotRepository
+from ..repositories import RobotRepository
 from ..schemas import AlertConfirmRequest, AlertListResponse, DeploymentListResponse, EventListResponse, MissionListResponse, MissionResponse, OverviewResponse, RobotEventRequest
 from ..views import alert_view, deployment_view, event_view, mission_view
 

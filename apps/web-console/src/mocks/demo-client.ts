@@ -1,0 +1,103 @@
+import type { AlertRecord, JsonObject, MapDeployment, Mission, MissionApi, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StoredMap } from "../api/types"
+
+const now = new Date()
+const iso = (minutes = 0) => new Date(now.getTime() - minutes * 60_000).toISOString()
+
+const robots: Robot[] = [
+  {
+    id: "car_1", name: "苍松一号", base_url: "http://10.60.162.192:8001", role: "leader", enabled: true,
+    capabilities: { mapping: true, navigation: true, patrol: true }, last_seen: iso(), online: true,
+    runtime_status: { mode: "NAV_PATROL", processes: { lidar: "running", slam: "stopped" }, navigation: { action_state: "active", current_map: "forest_lab__v3" }, patrol: { state: "running", current_index: 1, total_points: 4 }, ros: { last_speed: 25, publisher_ready: true } },
+  },
+  {
+    id: "car_2", name: "云杉二号", base_url: "http://10.60.162.193:8001", role: "wing", enabled: true,
+    capabilities: { mapping: true, navigation: true, patrol: true }, last_seen: iso(2), online: true,
+    runtime_status: { mode: "IDLE", processes: { lidar: "stopped", slam: "stopped" }, navigation: { action_state: "idle" }, patrol: { state: "idle" }, ros: { last_speed: 20, publisher_ready: true } },
+  },
+  {
+    id: "car_3", name: "冷杉三号", base_url: "http://10.60.162.194:8001", role: "reserve", enabled: true,
+    capabilities: { mapping: true, navigation: true }, last_seen: iso(48), online: false, runtime_status: null, runtime_error: "连续三次状态轮询失败",
+  },
+]
+
+const maps: StoredMap[] = [
+  { id: "map-forest-v3", logical_name: "forest_lab", version: 3, yaml_sha256: "a".repeat(64), image_sha256: "b".repeat(64), bundle_sha256: "c".repeat(64), resolution: 0.05, origin: [-12.4, -8.2, 0], width: 608, height: 384, source_robot_id: "car_1", created_at: iso(25) },
+  { id: "map-corridor-v1", logical_name: "north_corridor", version: 1, yaml_sha256: "d".repeat(64), image_sha256: "e".repeat(64), bundle_sha256: "f".repeat(64), resolution: 0.05, origin: [-4.1, -15.8, 0], width: 420, height: 720, source_robot_id: "car_2", created_at: iso(1440) },
+]
+
+const missions: Mission[] = [
+  { id: "mission-1", mission_type: "patrol", robot_id: "car_1", state: "running", request: { route: "north_loop" }, result: null, error: null, created_at: iso(18), started_at: iso(18), finished_at: null },
+  { id: "mission-2", mission_type: "map_dispatch", robot_id: null, state: "completed", request: { map_id: "map-forest-v3", robot_ids: ["car_1", "car_2"] }, result: { installed: 2 }, error: null, created_at: iso(90), started_at: iso(90), finished_at: iso(88) },
+  { id: "mission-3", mission_type: "navigation_goal", robot_id: "car_3", state: "failed", request: { x: 2.4, y: 1.1 }, result: null, error: "Robot car_3 is unreachable", created_at: iso(220), started_at: iso(220), finished_at: iso(218) },
+]
+
+const events: RobotEvent[] = [
+  { id: "event-1", robot_id: "car_1", mission_id: "mission-1", event_type: "smoke_detected", severity: "warning", payload: { confidence: 0.82, zone: "北侧样区" }, occurred_at: iso(4), received_at: iso(4) },
+  { id: "event-2", robot_id: "car_2", mission_id: null, event_type: "patrol_checkpoint", severity: "info", payload: { checkpoint: 3 }, occurred_at: iso(33), received_at: iso(33) },
+]
+
+const alerts: AlertRecord[] = [
+  { id: "alert-1", event_id: "event-1", state: "pending", confirmed_by: null, confirmed_at: null, resolution: null, event: events[0] },
+]
+
+const deployments: MapDeployment[] = [
+  { id: "dep-1", map_id: "map-forest-v3", robot_id: "car_1", state: "installed", installed_name: "forest_lab__v3", error: null, created_at: iso(80), started_at: iso(80), finished_at: iso(79), map: { id: "map-forest-v3", logical_name: "forest_lab", version: 3 }, robot: { id: "car_1", name: "苍松一号" } },
+  { id: "dep-2", map_id: "map-forest-v3", robot_id: "car_2", state: "installed", installed_name: "forest_lab__v3", error: null, created_at: iso(80), started_at: iso(80), finished_at: iso(78), map: { id: "map-forest-v3", logical_name: "forest_lab", version: 3 }, robot: { id: "car_2", name: "云杉二号" } },
+]
+
+function page<T>(items: T[], filters: Record<string, string> = {}): Page<T> {
+  const limit = Number(filters.limit || 50)
+  const offset = Number(filters.offset || 0)
+  return { items: items.slice(offset, offset + limit), total: items.length, limit, offset }
+}
+
+export class DemoMissionApi implements MissionApi {
+  async health() { return true }
+  async overview(): Promise<Overview> {
+    return {
+      robots: { total: robots.length, enabled: robots.filter((item) => item.enabled).length, online: robots.filter((item) => item.online).length, offline: robots.filter((item) => item.enabled && !item.online).length },
+      missions: { total: missions.length, running: missions.filter((item) => item.state === "running").length, failed: missions.filter((item) => item.state === "failed").length },
+      alerts: { total: alerts.length, pending: alerts.filter((item) => item.state === "pending").length },
+      maps: { total: maps.length, latest_created_at: maps[0].created_at },
+    }
+  }
+  async robots() { return structuredClone(robots) }
+  async robot(id: string) { const value = robots.find((item) => item.id === id); if (!value) throw new Error("车辆不存在"); return structuredClone(value) }
+  async createRobot(payload: Partial<Robot>) {
+    const value: Robot = { id: String(payload.id), name: String(payload.name), base_url: String(payload.base_url), role: payload.role || "robot", enabled: payload.enabled ?? true, capabilities: payload.capabilities || {}, last_seen: null, online: false, runtime_status: null }
+    robots.push(value); return structuredClone(value)
+  }
+  async updateRobot(id: string, payload: Partial<Robot>) { const value = robots.find((item) => item.id === id); if (!value) throw new Error("车辆不存在"); Object.assign(value, payload); return structuredClone(value) }
+  async robotAction(id: string, path: string, payload: JsonObject = {}) {
+    const robot = robots.find((item) => item.id === id); if (!robot) throw new Error("车辆不存在")
+    const status = (robot.runtime_status ||= {}) as JsonObject
+    if (path === "control/estop") status.mode = "EMERGENCY_STOP"
+    if (path === "control/clear-estop") status.mode = "IDLE"
+    if (path === "control/stop") status.mode = "IDLE"
+    if (path === "mapping/start") status.mode = "MAPPING"
+    if (path === "mapping/stop") status.mode = "IDLE"
+    return { ok: true, demo: true, path, payload }
+  }
+  async fleetStop() { robots.forEach((robot) => { if (robot.runtime_status) robot.runtime_status.mode = "IDLE" }); return { ok: true, demo: true } }
+  async maps() { return structuredClone(maps) }
+  async map(id: string) { const value = maps.find((item) => item.id === id); if (!value) throw new Error("地图不存在"); return structuredClone(value) }
+  async mapPreview(id: string) {
+    const label = maps.find((item) => item.id === id)?.logical_name || "map"
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="608" height="384"><rect width="100%" height="100%" fill="#d8d8d2"/><path d="M55 310H210V248H310V188H550M210 248V75M310 188V320M430 188V62" fill="none" stroke="#183c31" stroke-width="18"/><path d="M55 310H210V248H310V188H550M210 248V75M310 188V320M430 188V62" fill="none" stroke="#f9f8f2" stroke-width="13"/><text x="24" y="36" font-family="sans-serif" font-size="18" fill="#244c40">${label}</text></svg>`
+    return new Blob([svg], { type: "image/svg+xml" })
+  }
+  async mapDownload(id: string) { return new Blob([`demo bundle ${id}`], { type: "application/zip" }) }
+  async uploadMap(file: File, logicalName?: string) { return { ok: true, demo: true, filename: file.name, logical_name: logicalName } }
+  async importMap(payload: { robot_id: string; map_name: string; logical_name?: string }) { return { ok: true, demo: true, ...payload } }
+  async dispatchMap(id: string, robotIds: string[]) { return { ok: true, demo: true, map_id: id, robot_ids: robotIds } }
+  async deployments(filters: Record<string, string> = {}) { return page(deployments.filter((item) => (!filters.robot_id || item.robot_id === filters.robot_id) && (!filters.map_id || item.map_id === filters.map_id)), filters) }
+  async missions(filters: Record<string, string> = {}) { return page(missions.filter((item) => (!filters.robot_id || item.robot_id === filters.robot_id) && (!filters.state || item.state === filters.state) && (!filters.mission_type || item.mission_type === filters.mission_type)), filters) }
+  async events(filters: Record<string, string> = {}) { return page(events.filter((item) => (!filters.robot_id || item.robot_id === filters.robot_id) && (!filters.severity || item.severity === filters.severity) && (!filters.event_type || item.event_type === filters.event_type)), filters) }
+  async alerts(filters: Record<string, string> = {}) { return page(alerts.filter((item) => (!filters.robot_id || item.event.robot_id === filters.robot_id) && (!filters.state || item.state === filters.state)), filters) }
+  async confirmAlert(id: string, confirmedBy: string, resolution?: string) { const value = alerts.find((item) => item.id === id); if (value) Object.assign(value, { state: "confirmed", confirmed_by: confirmedBy, confirmed_at: new Date().toISOString(), resolution: resolution || null }); return { ok: true, demo: true } }
+  subscribeStatus(listener: (message: RuntimeStatusMessage) => void) {
+    listener({ type: "snapshot", robots: Object.fromEntries(robots.map((robot) => [robot.id, { online: robot.online, status: robot.runtime_status }])) })
+    const timer = window.setInterval(() => listener({ type: "robot_status", robot_id: "car_1", data: { online: true, status: robots[0].runtime_status } }), 5000)
+    return () => window.clearInterval(timer)
+  }
+}

@@ -41,6 +41,23 @@ services:
       timeout: 3s
       retries: 10
 
+  web-console:
+    build:
+      context: ./apps/web-console
+    restart: unless-stopped
+    environment:
+      WEB_CONSOLE_DEMO_MODE: ${WEB_CONSOLE_DEMO_MODE:-false}
+    ports:
+      - "28081:80"
+    depends_on:
+      mission-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
 volumes:
   mission_pg_data:
   mission_map_data:

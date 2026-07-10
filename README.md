@@ -9,6 +9,7 @@ control-plane service:
 - `robot/ros2_ws`: the local ROS2 capability layer managed by the agent.
 - `apps/mission-api`: the authenticated business API, PostgreSQL registry,
   mission/event store, status aggregator, and map distribution service.
+- `apps/web-console`: the React operator console that talks only to Mission API.
 
 The v1 loop is intentionally narrow and demonstrable:
 
@@ -66,8 +67,13 @@ docker compose up -d --build
 curl http://127.0.0.1:28080/health/ready
 ```
 
+Open the operator console at `http://127.0.0.1:28081`. Enter the shared Token
+from `.env`; it is retained only in the current browser tab. To run with
+explicit sample data, set `WEB_CONSOLE_DEMO_MODE=true` before recreating the
+web-console container.
+
 See `apps/mission-api/README.md` for registry, authentication, and map
-distribution flows.
+distribution flows, and `apps/web-console/README.md` for frontend development.
 
 ## Main Interfaces
 
