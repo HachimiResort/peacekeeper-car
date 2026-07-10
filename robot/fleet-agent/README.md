@@ -9,6 +9,8 @@
 - ROS2 process management for lidar and SLAM.
 - Click-to-sample camera frames and saved snapshots.
 - Map saving through `map_saver_cli`.
+- Direct Nav2 startup, AMCL initial pose, and `NavigateToPose` goals.
+- Sequential multi-point patrol routes with pause, resume, cancel, dwell, and loop control.
 
 The web UI does not auto-stream camera video. It requests a single JPEG only
 when `Sample` is clicked, reducing Wi-Fi load during ROS control and mapping.
@@ -53,6 +55,17 @@ real chassis feedback whenever the board exposes it.
 save command sets `save_map_timeout:=120000`, and the agent retries once when
 `map_saver_cli` reports a timeout because larger Yahboom maps can save slowly
 under load.
+
+For navigation, stop SLAM first, load a saved map with `Start Nav2`, click the
+robot's real position and publish its initial pose, then send a short goal.
+Nav2 remains an internal capability layer: its `/cmd_vel` stream is accepted
+only while the fleet-agent arbiter owns `NAV_PATROL` mode.
+
+Patrol can run a saved route from `configs/patrol_routes.yaml` or a draft route
+built by clicking points on the web map. Route files use `yaw_deg`; HTTP patrol
+points use `yaw` in radians. Pausing cancels the current Nav2 goal, and resume
+re-sends the same route point. Manual control, stop, emergency stop, and Nav2
+shutdown all cancel the patrol locally before changing control ownership.
 
 If direct laser tracking starts but the car does not move, check
 `GET /api/status`. In `ros.direct_cmd_vel_subscriber`, `ready` should be true,
@@ -109,6 +122,22 @@ POST /api/mapping/start
 POST /api/mapping/save
 POST /api/mapping/stop
 
+GET  /api/mapping/meta
+GET  /api/navigation/status
+POST /api/navigation/start
+POST /api/navigation/initial_pose
+POST /api/navigation/goal
+POST /api/navigation/cancel
+POST /api/navigation/stop
+
+GET  /api/patrol/routes
+POST /api/patrol/routes/reload
+GET  /api/patrol/status
+POST /api/patrol/start
+POST /api/patrol/pause
+POST /api/patrol/resume
+POST /api/patrol/cancel
+
 POST /api/tracking/laser/start
 POST /api/tracking/laser/stop
 
@@ -124,6 +153,19 @@ Manual command:
   "angular_z": 0.0,
   "ttl_ms": 500,
   "source": "web"
+}
+```
+
+Inline patrol request:
+
+```json
+{
+  "map_name": "lab_first_map",
+  "loop": false,
+  "points": [
+    {"name": "point_1", "x": 1.2, "y": 0.8, "yaw": 0.0, "dwell_s": 2.0},
+    {"name": "point_2", "x": 2.6, "y": 1.1, "yaw": 1.57, "dwell_s": 1.0}
+  ]
 }
 ```
 

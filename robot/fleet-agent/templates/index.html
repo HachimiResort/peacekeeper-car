@@ -167,7 +167,8 @@
     }
     input[type="range"] { width: 100%; }
     input[type="text"],
-    input[type="number"] {
+    input[type="number"],
+    select {
       width: 100%;
       min-height: 36px;
       padding: 7px 9px;
@@ -176,6 +177,7 @@
       background: var(--panel-2);
       color: var(--text);
     }
+    select { appearance: auto; }
     .map-click-marker {
       position: absolute;
       width: 24px;
@@ -184,7 +186,7 @@
       border-radius: 999px;
       transform: translate(-50%, -50%);
       pointer-events: none;
-      z-index: 3;
+      z-index: 4;
       box-shadow: 0 0 0 2px rgba(0,0,0,.7);
     }
     .map-click-marker::before,
@@ -204,6 +206,28 @@
       font-size: 12px;
       line-height: 1.45;
     }
+    .patrol-marker {
+      position: absolute;
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      transform: translate(-50%, -50%);
+      color: #07110d;
+      background: #f3b33d;
+      border: 2px solid #fff4d5;
+      box-shadow: 0 2px 8px rgba(0,0,0,.75);
+      font-size: 12px;
+      font-weight: 800;
+      pointer-events: none;
+      z-index: 3;
+    }
+    .patrol-marker.current {
+      background: #35c48f;
+      border-color: #d8fff1;
+    }
+    .check-label input { width: auto; }
     pre {
       margin: 0;
       max-height: 280px;
@@ -302,6 +326,24 @@
         <div id="navStatus" class="nav-summary">Nav2: idle</div>
       </section>
       <section>
+        <h2>Patrol Demo</h2>
+        <label>Saved route <select id="patrolRoute"><option value="">No saved routes</option></select></label>
+        <label style="margin-top: 8px;">Point dwell s <input id="patrolDwell" type="number" min="0" max="3600" step="0.5" value="1"></label>
+        <label class="check-label" style="margin-top: 8px;"><input id="patrolLoop" type="checkbox"> Loop draft route</label>
+        <div class="grid" style="margin-top: 8px;">
+          <button id="addPatrolPoint" class="primary">Add Point</button>
+          <button id="clearPatrolDraft">Clear Draft</button>
+          <button id="reloadPatrolRoutes">Reload Routes</button>
+          <button id="startSavedPatrol" class="primary">Start Saved</button>
+          <button id="startDraftPatrol" class="primary">Start Draft</button>
+          <button id="pausePatrol" class="warn">Pause</button>
+          <button id="resumePatrol">Resume</button>
+          <button id="cancelPatrol" class="danger wide">Cancel Patrol</button>
+        </div>
+        <div id="patrolDraft" class="nav-summary">Draft: 0 points</div>
+        <div id="patrolStatus" class="nav-summary">Patrol: idle</div>
+      </section>
+      <section>
         <h2>Laser Tracking</h2>
         <div class="grid">
           <button id="startLaserTracking" class="primary wide">Start Laser Tracking</button>
@@ -351,6 +393,11 @@
     const navYawDeg = document.getElementById("navYawDeg");
     const navSelected = document.getElementById("navSelected");
     const navStatus = document.getElementById("navStatus");
+    const patrolRoute = document.getElementById("patrolRoute");
+    const patrolDwell = document.getElementById("patrolDwell");
+    const patrolLoop = document.getElementById("patrolLoop");
+    const patrolDraftSummary = document.getElementById("patrolDraft");
+    const patrolStatus = document.getElementById("patrolStatus");
     const activeKeys = new Set();
     const motionTtlMs = 1500;
     const motionPeriodMs = 100;
@@ -361,6 +408,12 @@
     let latestMapName = "";
     let mapMeta = null;
     let selectedMapPoint = null;
+    let patrolRoutes = {};
+    let patrolDraft = [];
+    let patrolDraftMapName = "";
+    let patrolActiveRoute = null;
+    let patrolActiveState = "idle";
+    let patrolCurrentIndex = null;
     let odomTrail = [];
     let lastPoseSignature = "";
     let lastRunId = "{{ run_id }}";
@@ -548,6 +601,17 @@
       return data;
     }
 
+    async function getJson(url) {
+      const res = await fetch(url);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(data.message || res.statusText);
+        err.payload = data;
+        throw err;
+      }
+      return data;
+    }
+
     function setDisplayMode(mode) {
       displayMode = mode;
       const showingCamera = mode === "camera";
@@ -579,6 +643,7 @@
         drawOdomView();
       }
       updateMapMarkerVisibility();
+      renderPatrolMarkers();
     }
 
     function updateMapMarkerVisibility() {
@@ -597,6 +662,7 @@
       selectedMapPoint = null;
       navSelected.textContent = `Selected: click map (${meta.width}x${meta.height}, ${meta.resolution} m/pixel)`;
       updateMapMarkerVisibility();
+      renderPatrolMarkers();
       return meta;
     }
 
@@ -618,6 +684,96 @@
         width,
         height,
       };
+    }
+
+    function patrolPointsForDisplay() {
+      const active = ["running", "pausing", "paused", "canceling"].includes(patrolActiveState);
+      if (active && patrolActiveRoute) return patrolActiveRoute.points || [];
+      if (patrolDraft.length) return patrolDraft;
+      const saved = patrolRoutes[patrolRoute.value];
+      return saved ? (saved.points || []) : [];
+    }
+
+    function renderPatrolMarkers() {
+      document.querySelectorAll(".patrol-marker").forEach((marker) => marker.remove());
+      if (displayMode !== "map" || !mapMeta || mapFrame.hidden) return;
+      const layout = mapImageLayout();
+      if (!layout) return;
+      const wrap = document.querySelector(".video-wrap");
+      const wrapRect = wrap.getBoundingClientRect();
+      const points = patrolPointsForDisplay();
+      points.forEach((point, index) => {
+        const pixelX = (Number(point.x) - mapMeta.origin.x) / mapMeta.resolution - 0.5;
+        const pixelY = mapMeta.height - (Number(point.y) - mapMeta.origin.y) / mapMeta.resolution - 0.5;
+        if (pixelX < 0 || pixelY < 0 || pixelX >= mapMeta.width || pixelY >= mapMeta.height) return;
+        const marker = document.createElement("div");
+        marker.className = "patrol-marker";
+        if (["running", "pausing", "paused"].includes(patrolActiveState) && index === patrolCurrentIndex) {
+          marker.classList.add("current");
+        }
+        marker.textContent = String(index + 1);
+        marker.title = `${point.name || `Point ${index + 1}`} x=${Number(point.x).toFixed(2)} y=${Number(point.y).toFixed(2)}`;
+        marker.style.left = `${layout.rect.left - wrapRect.left + layout.offsetX + pixelX * layout.scale}px`;
+        marker.style.top = `${layout.rect.top - wrapRect.top + layout.offsetY + pixelY * layout.scale}px`;
+        wrap.appendChild(marker);
+      });
+    }
+
+    function updatePatrolDraftSummary() {
+      const names = patrolDraft.map((point, index) => `${index + 1}:${point.name}`).join(" ");
+      patrolDraftSummary.textContent = `Draft: ${patrolDraft.length} points${names ? ` | ${names}` : ""}`;
+      renderPatrolMarkers();
+    }
+
+    function addSelectedPatrolPoint() {
+      if (!selectedMapPoint) throw new Error("Click a point on the saved map first");
+      const dwell = Number(patrolDwell.value || 0);
+      if (!Number.isFinite(dwell) || dwell < 0 || dwell > 3600) {
+        throw new Error("Point dwell must be between 0 and 3600 seconds");
+      }
+      const mapName = activeMapName();
+      if (patrolDraft.length && patrolDraftMapName !== mapName) {
+        throw new Error(`Draft belongs to map ${patrolDraftMapName}; clear it before switching maps`);
+      }
+      patrolDraftMapName = mapName;
+      patrolDraft.push({
+        name: `point_${patrolDraft.length + 1}`,
+        x: selectedMapPoint.x,
+        y: selectedMapPoint.y,
+        yaw: Number(navYawDeg.value || 0) * Math.PI / 180,
+        dwell_s: dwell,
+      });
+      updatePatrolDraftSummary();
+    }
+
+    function clearPatrolDraft() {
+      patrolDraft = [];
+      patrolDraftMapName = "";
+      updatePatrolDraftSummary();
+    }
+
+    async function refreshPatrolRoutes(reload = false) {
+      const previous = patrolRoute.value;
+      const data = reload
+        ? await postJson("/api/patrol/routes/reload")
+        : await getJson("/api/patrol/routes");
+      patrolRoutes = data.routes || {};
+      const names = Object.keys(patrolRoutes).sort();
+      patrolRoute.innerHTML = "";
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = names.length ? "Select a saved route" : "No saved routes";
+      patrolRoute.appendChild(empty);
+      names.forEach((name) => {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = `${name} (${patrolRoutes[name].points.length} points)`;
+        patrolRoute.appendChild(option);
+      });
+      if (previous && patrolRoutes[previous]) patrolRoute.value = previous;
+      if (data.routes_error) patrolStatus.textContent = `Patrol routes: ${data.routes_error}`;
+      renderPatrolMarkers();
+      return data;
     }
 
     function handleMapClick(event) {
@@ -686,6 +842,39 @@
       navStatus.textContent = `Nav2: ${nav.action_state || "idle"} | map ${map}`;
     }
 
+    async function startSavedPatrolRoute() {
+      const routeName = patrolRoute.value;
+      if (!routeName) throw new Error("Select a saved patrol route first");
+      const result = await postJson("/api/patrol/start", {route_name: routeName});
+      patrolStatus.textContent = `Patrol: starting ${routeName}`;
+      return result;
+    }
+
+    async function startDraftPatrolRoute() {
+      if (!patrolDraft.length) throw new Error("Add at least one map point to the draft route");
+      const result = await postJson("/api/patrol/start", {
+        map_name: patrolDraftMapName || activeMapName(),
+        loop: patrolLoop.checked,
+        points: patrolDraft,
+      });
+      patrolStatus.textContent = `Patrol: starting draft (${patrolDraft.length} points)`;
+      return result;
+    }
+
+    function updatePatrolStatus(status) {
+      if (!status || !status.patrol) return;
+      const patrol = status.patrol;
+      patrolActiveState = patrol.state || "idle";
+      patrolActiveRoute = patrol.route || null;
+      patrolCurrentIndex = patrol.current_index;
+      const pointNumber = patrol.current_index === null || patrol.current_index === undefined
+        ? "-"
+        : `${patrol.current_index + 1}/${patrol.total_points}`;
+      const error = patrol.last_error ? ` | ${patrol.last_error}` : "";
+      patrolStatus.textContent = `Patrol: ${patrolActiveState} | route ${patrol.route_name || "none"} | point ${pointNumber} | cycle ${patrol.cycle || 0}${error}`;
+      renderPatrolMarkers();
+    }
+
     async function showMapPreview(name = "") {
       const query = name ? `?name=${encodeURIComponent(name)}&t=${Date.now()}` : `?t=${Date.now()}`;
       try {
@@ -697,6 +886,7 @@
           selectedMapPoint = null;
           navSelected.textContent = `Selected: ${err.message}`;
           updateMapMarkerVisibility();
+          renderPatrolMarkers();
         });
         mapFrame.onload = () => {
           samplePlaceholder.hidden = true;
@@ -707,6 +897,7 @@
         };
         mapFrame.onerror = () => {
           mapFrame.hidden = true;
+          renderPatrolMarkers();
           samplePlaceholder.hidden = false;
           samplePlaceholder.textContent = "Map preview failed";
         };
@@ -716,6 +907,7 @@
         mapMeta = null;
         selectedMapPoint = null;
         updateMapMarkerVisibility();
+        renderPatrolMarkers();
         samplePlaceholder.hidden = false;
         samplePlaceholder.textContent = err.message || "No saved map preview";
         setDisplayMode("map");
@@ -825,6 +1017,18 @@
     document.getElementById("sendNavGoal").onclick = () => sendNavigationGoal().catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
     document.getElementById("cancelNavGoal").onclick = () => postJson("/api/navigation/cancel").then(() => { navStatus.textContent = "Nav2: goal canceled"; }).catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
     document.getElementById("stopNav2").onclick = () => postJson("/api/navigation/stop").then(() => { navStatus.textContent = "Nav2: stopped"; }).catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("addPatrolPoint").onclick = () => {
+      try { addSelectedPatrolPoint(); }
+      catch (err) { alert(err.message || String(err)); }
+    };
+    document.getElementById("clearPatrolDraft").onclick = clearPatrolDraft;
+    document.getElementById("reloadPatrolRoutes").onclick = () => refreshPatrolRoutes(true).catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("startSavedPatrol").onclick = () => startSavedPatrolRoute().catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("startDraftPatrol").onclick = () => startDraftPatrolRoute().catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("pausePatrol").onclick = () => postJson("/api/patrol/pause").catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("resumePatrol").onclick = () => postJson("/api/patrol/resume").catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    document.getElementById("cancelPatrol").onclick = () => postJson("/api/patrol/cancel").catch((err) => alert(JSON.stringify(err.payload || {message: String(err)}, null, 2)));
+    patrolRoute.onchange = renderPatrolMarkers;
     document.getElementById("startLaserTracking").onclick = () => postJson("/api/tracking/laser/start").catch(alert);
     document.getElementById("stopLaserTracking").onclick = () => postJson("/api/tracking/laser/stop").catch(alert);
     document.getElementById("sampleCamera").onclick = () => {
@@ -863,6 +1067,7 @@
         statusEl.textContent = JSON.stringify(data, null, 2);
         updateOdomView(data);
         updateNavigationStatus(data);
+        updatePatrolStatus(data);
       };
       ws.onclose = () => {
         dotEl.classList.remove("online");
@@ -871,7 +1076,13 @@
         setTimeout(connectWs, 1000);
       };
     }
-    window.addEventListener("resize", drawOdomView);
+    window.addEventListener("resize", () => {
+      drawOdomView();
+      renderPatrolMarkers();
+    });
+    refreshPatrolRoutes().catch((err) => {
+      patrolStatus.textContent = `Patrol routes: ${err.message || err}`;
+    });
     connectWs();
   </script>
 </body>

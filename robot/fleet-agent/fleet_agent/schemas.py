@@ -1,5 +1,5 @@
 """HTTP request and response models."""
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,21 @@ class NavigationPoseRequest(BaseModel):
     x: float
     y: float
     yaw: float = 0.0
+
+
+class PatrolPointRequest(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=64)
+    x: float
+    y: float
+    yaw: float = 0.0
+    dwell_s: float = Field(default=0.0, ge=0.0, le=3600.0)
+
+
+class PatrolStartRequest(BaseModel):
+    route_name: Optional[str] = Field(default=None, max_length=64)
+    map_name: Optional[str] = Field(default=None, max_length=64)
+    loop: Optional[bool] = None
+    points: List[PatrolPointRequest] = Field(default_factory=list)
 
 
 class SnapshotResponse(BaseModel):

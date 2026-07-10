@@ -18,10 +18,13 @@ try:
 except Exception:  # pragma: no cover - depends on optional local test deps
     app_module = None
 
+import fleet_agent.patrol as patrol_module
+
 from fleet_agent.command_arbiter import CommandArbiter
-from fleet_agent.config import AgentConfig, ProcessConfig, SafetyConfig, load_config
+from fleet_agent.config import AgentConfig, PatrolConfig, ProcessConfig, SafetyConfig, load_config
 from fleet_agent.mapping import MappingService
 from fleet_agent.navigation import NavigationService
+from fleet_agent.patrol import PatrolService
 from fleet_agent.rosmaster_control import RosmasterController
 from fleet_agent.ros_control import CmdVelPublisher, DirectCmdVelSubscriber, DirectOdomPublisher
 from fleet_agent.state import Mode, RuntimeState
@@ -154,7 +157,7 @@ class FakeNavigationService:
     def send_goal(self, x, y, yaw):
         if not self.current_map_name:
             raise RuntimeError("Nav2 is not running; call /api/navigation/start first")
-        return {"ok": True, "goal": {"x": x, "y": y, "yaw": yaw}}
+        return {"ok": True, "goal_id": "fake-goal", "goal": {"x": x, "y": y, "yaw": yaw}}
 
     def cancel_goal(self):
         self.cancel_count += 1
@@ -170,7 +173,10 @@ class FakeNavigationService:
             "process": None,
             "current_map": self.current_map_name,
             "current_goal": None,
+            "active_goal_id": None,
             "action_state": "running" if self.current_map_name else "idle",
+            "last_result": None,
+            "feedback": None,
             "last_error": None,
             "ready": bool(self.current_map_name),
             "spin_thread_alive": False,
@@ -178,6 +184,33 @@ class FakeNavigationService:
 
     def shutdown(self):
         return None
+
+
+class FakePatrolNavigation:
+    def __init__(self, outcomes=None):
+        self.outcomes = list(outcomes or [])
+        self.goals = []
+        self.results = {}
+        self.cancel_count = 0
+
+    def status(self):
+        return {"ready": True, "current_map": "lab", "active_goal_id": None}
+
+    def send_goal(self, x, y, yaw):
+        goal_id = f"goal-{len(self.goals) + 1}"
+        self.goals.append((x, y, yaw))
+        state = self.outcomes.pop(0) if self.outcomes else "succeeded"
+        self.results[goal_id] = {"goal_id": goal_id, "state": state, "error": None}
+        return {"ok": True, "goal_id": goal_id}
+
+    def wait_for_goal(self, goal_id, timeout_s=None):
+        del timeout_s
+        return dict(self.results[goal_id])
+
+    def cancel_goal(self, wait_timeout_s=0.0):
+        del wait_timeout_s
+        self.cancel_count += 1
+        return {"ok": True, "action_state": "canceled"}
 
 
 def tracking_config():
@@ -259,6 +292,120 @@ class CoreTests(unittest.TestCase):
 
             with self.assertRaises(FileNotFoundError):
                 service.start("missing")
+
+    def test_navigation_ignores_and_cancels_stale_goal_response(self):
+        class FakeGoalHandle:
+            accepted = True
+
+            def __init__(self):
+                self.cancel_count = 0
+
+            def cancel_goal_async(self):
+                self.cancel_count += 1
+                return object()
+
+        class FakeFuture:
+            def __init__(self, value):
+                self.value = value
+
+            def result(self):
+                return self.value
+
+        config = AgentConfig()
+        service = NavigationService(config, FakeManagedProcessManager(config), ("", ""))
+        handle = FakeGoalHandle()
+        with service.condition:
+            service._active_goal_id = "nav-2"
+            service.action_state = "sending"
+
+        service._on_goal_response("nav-1", FakeFuture(handle))
+
+        self.assertEqual(handle.cancel_count, 1)
+        self.assertEqual(service._active_goal_id, "nav-2")
+        self.assertEqual(service.action_state, "sending")
+
+    def test_navigation_wait_returns_terminal_result(self):
+        config = AgentConfig()
+        service = NavigationService(config, FakeManagedProcessManager(config), ("", ""))
+        with service.condition:
+            service._active_goal_id = "nav-1"
+            service.action_state = "active"
+
+        service._finish_goal("nav-1", "succeeded", None, status_code=4)
+        result = service.wait_for_goal("nav-1", timeout_s=0.01)
+
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(result["status_code"], 4)
+
+    def test_patrol_executes_points_in_order_and_converts_yaw_degrees(self):
+        navigation = FakePatrolNavigation()
+        stops = []
+        service = PatrolService(
+            PatrolConfig(routes_file="/missing", poll_period_s=0.01),
+            navigation,
+            before_goal=lambda: {"ok": True},
+            stop_motion=lambda: stops.append(True),
+            routes={
+                "lab_route": {
+                    "map_name": "lab",
+                    "loop": False,
+                    "points": [
+                        {"name": "a", "x": 1, "y": 2, "yaw_deg": 90, "dwell_s": 0},
+                        {"name": "b", "x": 3, "y": 4, "yaw_deg": 180, "dwell_s": 0},
+                    ],
+                }
+            },
+        )
+        route = service.build_route(route_name="lab_route")
+
+        service.start(route)
+        deadline = time.monotonic() + 1.0
+        while service.status()["worker_alive"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        self.assertEqual(service.status()["state"], "completed")
+        self.assertEqual(len(navigation.goals), 2)
+        self.assertAlmostEqual(navigation.goals[0][2], 1.57079632679, places=5)
+        self.assertAlmostEqual(abs(navigation.goals[1][2]), 3.14159265359, places=5)
+        self.assertGreaterEqual(len(stops), 1)
+
+    def test_patrol_empty_routes_load_without_yaml_dependency(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            routes_file = Path(temp_dir) / "routes.yaml"
+            routes_file.write_text("# no routes yet\nroutes: {}\n", encoding="utf-8")
+            with patch.object(patrol_module, "yaml", None):
+                service = PatrolService(
+                    PatrolConfig(routes_file=str(routes_file)),
+                    FakePatrolNavigation(),
+                    before_goal=lambda: {"ok": True},
+                    stop_motion=lambda: None,
+                )
+
+            self.assertEqual(service.routes_status()["routes"], {})
+            self.assertIsNone(service.routes_status()["routes_error"])
+
+    def test_patrol_stops_route_after_navigation_failure(self):
+        navigation = FakePatrolNavigation(outcomes=["aborted"])
+        service = PatrolService(
+            PatrolConfig(routes_file="/missing", poll_period_s=0.01),
+            navigation,
+            before_goal=lambda: {"ok": True},
+            stop_motion=lambda: None,
+            routes={},
+        )
+        route = service.build_route(
+            map_name="lab",
+            points=[{"name": "bad", "x": 1, "y": 2, "yaw": 0, "dwell_s": 0}],
+        )
+
+        service.start(route)
+        deadline = time.monotonic() + 1.0
+        while service.status()["worker_alive"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        status = service.status()
+        self.assertEqual(status["state"], "failed")
+        self.assertIn("state=aborted", status["last_error"])
 
     def test_rosmaster_backend_uses_continuous_motion_by_default(self):
         class FakeBot:

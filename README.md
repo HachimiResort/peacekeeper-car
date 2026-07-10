@@ -19,6 +19,13 @@ Start fleet-agent
 -> stop or emergency-stop safely
 ```
 
+The vehicle demo now also supports the next direct-mode loop:
+
+```text
+load saved map -> set AMCL initial pose -> send Nav2 goal
+-> build or load a multi-point patrol route -> pause/resume/cancel safely
+```
+
 The intended direct-mode control ownership rule is strict: fleet-agent is the
 only process that writes `/dev/myserial`. It subscribes to ROS2 `/cmd_vel`,
 arbitrates that stream against manual control and emergency stop, then calls

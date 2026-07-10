@@ -58,3 +58,9 @@ processes:
 
 mapping:
   saver_command: ros2 run nav2_map_server map_saver_cli -f {map_path} --ros-args -p save_map_timeout:=120000
+
+patrol:
+  routes_file: /root/peacekeeper-car/configs/patrol_routes.yaml
+  goal_timeout_s: 180
+  cancel_timeout_s: 5
+  poll_period_s: 0.2

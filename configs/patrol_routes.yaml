@@ -1,0 +1,11 @@
+# Route yaw uses degrees here. The web/API converts its yaw input to radians.
+routes: {}
+
+# Example (replace coordinates with points from your saved map):
+# routes:
+#   lab_patrol:
+#     map_name: lab_first_map
+#     loop: true
+#     points:
+#       - {name: corridor_a, x: 1.2, y: 0.8, yaw_deg: 0, dwell_s: 2}
+#       - {name: corridor_b, x: 4.5, y: 0.9, yaw_deg: 90, dwell_s: 3}

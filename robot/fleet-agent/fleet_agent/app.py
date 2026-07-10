@@ -16,10 +16,11 @@ from .command_arbiter import CommandArbiter
 from .config import AgentConfig
 from .mapping import MappingService
 from .navigation import NavigationService
+from .patrol import PatrolService
 from .process_manager import ProcessManager
 from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher
 from .rosmaster_control import RosmasterController
-from .schemas import CmdVelRequest, NavigationPoseRequest, NavigationStartRequest, ProcessRequest, SaveMapRequest
+from .schemas import CmdVelRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
 from .video import VideoService
 
@@ -75,6 +76,12 @@ def create_app(config: AgentConfig) -> FastAPI:
         process_manager,
         setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
     )
+    patrol = PatrolService(
+        config.patrol,
+        navigation,
+        before_goal=lambda: cmd_vel.enable_ros_cmd_vel(Mode.NAV_PATROL),
+        stop_motion=cmd_vel.stop,
+    )
 
     templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
@@ -96,6 +103,7 @@ def create_app(config: AgentConfig) -> FastAPI:
         try:
             yield
         finally:
+            patrol.shutdown()
             navigation.shutdown()
             direct_odom.shutdown()
             if direct_cmd_vel is not None:
@@ -133,6 +141,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             "process_details": process_status,
             "video": video.status(),
             "navigation": navigation.status(),
+            "patrol": patrol.status(),
             "ros": ros_status,
             "last_error": state.last_error,
             "data_dir": str(data_dir),
@@ -149,6 +158,15 @@ def create_app(config: AgentConfig) -> FastAPI:
     async def publish_manual_command(payload: CmdVelRequest):
         if state.mode == Mode.LASER_TRACKING and is_zero_cmd(payload):
             return await stop_laser_tracking()
+        if not is_zero_cmd(payload):
+            if await _run_blocking(patrol.is_active):
+                await _run_blocking(
+                    patrol.cancel,
+                    "manual_override",
+                    config.patrol.cancel_timeout_s,
+                )
+            elif (await _run_blocking(navigation.status)).get("active_goal_id"):
+                await _run_blocking(navigation.cancel_goal)
         result = await _run_blocking(
             cmd_vel.handle_manual_command,
             payload.linear_x,
@@ -254,7 +272,9 @@ def create_app(config: AgentConfig) -> FastAPI:
         if state.mode == Mode.LASER_TRACKING:
             return await stop_laser_tracking()
         try:
-            if state.mode == Mode.NAV_PATROL:
+            if await _run_blocking(patrol.is_active):
+                await _run_blocking(patrol.cancel, "operator_stop")
+            if state.mode == Mode.NAV_PATROL or (await _run_blocking(navigation.status)).get("active_goal_id"):
                 await _run_blocking(navigation.cancel_goal)
             await _run_blocking(cmd_vel.stop)
             if state.mode == Mode.MANUAL:
@@ -267,6 +287,10 @@ def create_app(config: AgentConfig) -> FastAPI:
     @app.post("/api/control/estop")
     async def control_estop(stop_processes: bool = Query(default=True)):
         state.set_estop()
+        try:
+            await _run_blocking(patrol.cancel, "estop")
+        except Exception:
+            pass
         try:
             await _run_blocking(navigation.cancel_goal)
         except Exception:
@@ -288,6 +312,11 @@ def create_app(config: AgentConfig) -> FastAPI:
                 {"ok": False, "message": "Laser tracking is active; stop tracking before starting processes"},
                 status_code=409,
             )
+        if payload.process == "slam" and (await _run_blocking(navigation.status)).get("ready"):
+            return JSONResponse(
+                {"ok": False, "message": "Nav2 is running; stop navigation before starting SLAM"},
+                status_code=409,
+            )
         try:
             status = await _run_blocking(process_manager.start, payload.process)
             return {"ok": True, "process": payload.process, "status": status}
@@ -303,6 +332,8 @@ def create_app(config: AgentConfig) -> FastAPI:
                 status_code=409,
             )
         try:
+            if payload.process == "nav2" and await _run_blocking(patrol.is_active):
+                await _run_blocking(patrol.cancel, "nav2_process_stop")
             status = await _run_blocking(process_manager.stop, payload.process)
             return {"ok": True, "process": payload.process, "status": status}
         except Exception as exc:
@@ -312,6 +343,7 @@ def create_app(config: AgentConfig) -> FastAPI:
     @app.post("/api/process/stop_all")
     async def process_stop_all():
         try:
+            await _run_blocking(patrol.cancel, "stop_all")
             await _run_blocking(navigation.cancel_goal)
             await _run_blocking(cmd_vel.stop)
         except Exception:
@@ -328,6 +360,16 @@ def create_app(config: AgentConfig) -> FastAPI:
         if state.mode == Mode.LASER_TRACKING:
             return JSONResponse(
                 {"ok": False, "message": "Laser tracking is active; stop tracking before mapping"},
+                status_code=409,
+            )
+        if await _run_blocking(patrol.is_active):
+            return JSONResponse(
+                {"ok": False, "message": "Patrol is active; cancel patrol before mapping"},
+                status_code=409,
+            )
+        if (await _run_blocking(navigation.status)).get("ready"):
+            return JSONResponse(
+                {"ok": False, "message": "Nav2 is running; stop navigation before mapping"},
                 status_code=409,
             )
         try:
@@ -402,6 +444,11 @@ def create_app(config: AgentConfig) -> FastAPI:
                 {"ok": False, "message": "Stop mapping before navigation"},
                 status_code=409,
             )
+        if await _run_blocking(patrol.is_active):
+            return JSONResponse(
+                {"ok": False, "message": "Patrol is active; cancel patrol before restarting Nav2"},
+                status_code=409,
+            )
         process_status = await _run_blocking(process_manager.status)
         slam_status = process_status.get("slam", {}).get("status")
         if slam_status == "running":
@@ -410,6 +457,9 @@ def create_app(config: AgentConfig) -> FastAPI:
                 status_code=409,
             )
         try:
+            map_info = await _run_blocking(mapping.latest_map, payload.map_name)
+            if not Path(map_info["yaml"]).is_file():
+                raise FileNotFoundError(f"Map metadata '{Path(map_info['yaml']).name}' was not found")
             await _run_blocking(process_manager.start, "lidar")
             if direct_cmd_vel is not None:
                 await _run_blocking(direct_cmd_vel.start)
@@ -424,9 +474,22 @@ def create_app(config: AgentConfig) -> FastAPI:
     @app.post("/api/navigation/initial_pose")
     async def navigation_initial_pose(payload: NavigationPoseRequest):
         try:
+            nav_status = await _run_blocking(navigation.status)
+            if not nav_status.get("ready"):
+                await _run_blocking(cmd_vel.stop)
+                return JSONResponse(
+                    {"ok": False, "message": "Nav2 is not running; call /api/navigation/start first"},
+                    status_code=409,
+                )
+            if payload.map_name and MappingService._safe_name(payload.map_name) != nav_status.get("current_map"):
+                await _run_blocking(cmd_vel.stop)
+                return JSONResponse(
+                    {"ok": False, "message": "Initial pose map does not match the map currently loaded by Nav2"},
+                    status_code=409,
+                )
             result = await _run_blocking(navigation.publish_initial_pose, payload.x, payload.y, payload.yaw)
             return result
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
         except Exception as exc:
             state.set_error(str(exc))
@@ -436,7 +499,25 @@ def create_app(config: AgentConfig) -> FastAPI:
     async def navigation_goal(payload: NavigationPoseRequest):
         if state.estop:
             return JSONResponse({"ok": False, "message": "ESTOP is active"}, status_code=409)
+        if await _run_blocking(patrol.is_active):
+            return JSONResponse(
+                {"ok": False, "message": "Patrol owns navigation; cancel patrol before sending a standalone goal"},
+                status_code=409,
+            )
         try:
+            nav_status = await _run_blocking(navigation.status)
+            if not nav_status.get("ready"):
+                await _run_blocking(cmd_vel.stop)
+                return JSONResponse(
+                    {"ok": False, "message": "Nav2 is not running; call /api/navigation/start first"},
+                    status_code=409,
+                )
+            if payload.map_name and MappingService._safe_name(payload.map_name) != nav_status.get("current_map"):
+                await _run_blocking(cmd_vel.stop)
+                return JSONResponse(
+                    {"ok": False, "message": "Goal map does not match the map currently loaded by Nav2"},
+                    status_code=409,
+                )
             if direct_cmd_vel is not None:
                 await _run_blocking(direct_cmd_vel.start)
             result = await _run_blocking(cmd_vel.enable_ros_cmd_vel, Mode.NAV_PATROL)
@@ -444,7 +525,7 @@ def create_app(config: AgentConfig) -> FastAPI:
                 return JSONResponse(result, status_code=409)
             goal = await _run_blocking(navigation.send_goal, payload.x, payload.y, payload.yaw)
             return {"ok": True, "mode": state.mode.value, "navigation": goal}
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             await _run_blocking(cmd_vel.stop)
             return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
         except Exception as exc:
@@ -454,6 +535,7 @@ def create_app(config: AgentConfig) -> FastAPI:
 
     @app.post("/api/navigation/cancel")
     async def navigation_cancel():
+        await _run_blocking(patrol.cancel, "navigation_cancel")
         result = await _run_blocking(navigation.cancel_goal)
         await _run_blocking(cmd_vel.stop)
         status_code = 200 if result.get("ok", False) else 500
@@ -461,6 +543,7 @@ def create_app(config: AgentConfig) -> FastAPI:
 
     @app.post("/api/navigation/stop")
     async def navigation_stop():
+        await _run_blocking(patrol.cancel, "navigation_stop")
         result = await _run_blocking(navigation.stop)
         await _run_blocking(cmd_vel.stop)
         return {"ok": True, "mode": state.mode.value, "navigation": result}
@@ -469,6 +552,86 @@ def create_app(config: AgentConfig) -> FastAPI:
     async def navigation_status():
         status = await _run_blocking(navigation.status)
         return JSONResponse({"ok": True, **status})
+
+    @app.get("/api/patrol/routes")
+    async def patrol_routes():
+        status = await _run_blocking(patrol.routes_status)
+        return JSONResponse({"ok": True, **status})
+
+    @app.post("/api/patrol/routes/reload")
+    async def patrol_routes_reload():
+        try:
+            result = await _run_blocking(patrol.reload_routes)
+            return {"ok": True, **result}
+        except Exception as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+    @app.get("/api/patrol/status")
+    async def patrol_status():
+        status = await _run_blocking(patrol.status)
+        return JSONResponse({"ok": True, **status})
+
+    @app.post("/api/patrol/start")
+    async def patrol_start(payload: PatrolStartRequest):
+        if state.estop:
+            return JSONResponse({"ok": False, "message": "ESTOP is active"}, status_code=409)
+        if state.mode in (Mode.MAPPING, Mode.SAVING_MAP, Mode.LASER_TRACKING):
+            return JSONResponse(
+                {"ok": False, "message": f"Cannot start patrol while mode={state.mode.value}"},
+                status_code=409,
+            )
+        try:
+            points = [
+                point.model_dump() if hasattr(point, "model_dump") else point.dict()
+                for point in payload.points
+            ]
+            route = await _run_blocking(
+                patrol.build_route,
+                payload.route_name,
+                payload.map_name,
+                points,
+                payload.loop,
+            )
+            nav_status = await _run_blocking(navigation.status)
+            if not nav_status.get("ready"):
+                return JSONResponse(
+                    {"ok": False, "message": "Start Nav2 and set the initial pose before patrol"},
+                    status_code=409,
+                )
+            if route.get("map_name") is None:
+                route["map_name"] = nav_status.get("current_map")
+            if direct_cmd_vel is not None:
+                await _run_blocking(direct_cmd_vel.start)
+            result = await _run_blocking(patrol.start, route)
+            return {"ok": True, "patrol": result}
+        except KeyError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
+        except (RuntimeError, ValueError) as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
+
+    @app.post("/api/patrol/pause")
+    async def patrol_pause():
+        try:
+            return {"ok": True, "patrol": await _run_blocking(patrol.pause)}
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+
+    @app.post("/api/patrol/resume")
+    async def patrol_resume():
+        try:
+            return {"ok": True, "patrol": await _run_blocking(patrol.resume)}
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+
+    @app.post("/api/patrol/cancel")
+    async def patrol_cancel():
+        result = await _run_blocking(patrol.cancel, "operator_cancel")
+        await _run_blocking(navigation.cancel_goal)
+        await _run_blocking(cmd_vel.stop)
+        return {"ok": True, "mode": state.mode.value, "patrol": result}
 
     @app.post("/api/mapping/save")
     async def mapping_save(payload: SaveMapRequest):

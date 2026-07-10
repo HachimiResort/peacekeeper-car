@@ -74,6 +74,14 @@ class MappingConfig:
 
 
 @dataclass
+class PatrolConfig:
+    routes_file: str = "/root/peacekeeper-car/configs/patrol_routes.yaml"
+    goal_timeout_s: float = 180.0
+    cancel_timeout_s: float = 5.0
+    poll_period_s: float = 0.2
+
+
+@dataclass
 class AgentConfig:
     host: str = "0.0.0.0"
     port: int = 8001
@@ -100,6 +108,7 @@ class AgentConfig:
         }
     )
     mapping: MappingConfig = field(default_factory=MappingConfig)
+    patrol: PatrolConfig = field(default_factory=PatrolConfig)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -124,6 +133,7 @@ def _to_dict(config: AgentConfig) -> dict:
         "control": vars(config.control),
         "processes": {key: vars(value) for key, value in config.processes.items()},
         "mapping": vars(config.mapping),
+        "patrol": vars(config.patrol),
     }
 
 
@@ -147,6 +157,7 @@ def _from_dict(raw: dict) -> AgentConfig:
         control=ControlConfig(**raw.get("control", {})),
         processes=processes or AgentConfig().processes,
         mapping=MappingConfig(**raw.get("mapping", {})),
+        patrol=PatrolConfig(**raw.get("patrol", {})),
     )
 
 
