@@ -1,0 +1,88 @@
+from typing import Any, Optional
+
+import httpx
+
+from .errors import AgentError
+from .models import Robot
+
+
+class FleetAgentClient:
+    def __init__(self, shared_token: str, status_timeout_s: float, control_timeout_s: float, map_timeout_s: float):
+        self.shared_token = shared_token
+        self.status_timeout_s = status_timeout_s
+        self.control_timeout_s = control_timeout_s
+        self.map_timeout_s = map_timeout_s
+        self.client = httpx.AsyncClient(headers={"X-Peacekeeper-Token": shared_token})
+
+    async def close(self) -> None:
+        await self.client.aclose()
+
+    async def status(self, robot: Robot) -> dict[str, Any]:
+        return await self.request(robot, "GET", "/api/status", timeout_s=self.status_timeout_s)
+
+    async def request(
+        self,
+        robot: Robot,
+        method: str,
+        path: str,
+        payload: Optional[dict] = None,
+        timeout_s: Optional[float] = None,
+    ) -> dict[str, Any]:
+        url = f"{robot.base_url.rstrip('/')}{path}"
+        try:
+            response = await self.client.request(
+                method,
+                url,
+                json=payload,
+                timeout=timeout_s or self.control_timeout_s,
+            )
+        except httpx.TimeoutException as exc:
+            raise AgentError(504, "agent_timeout", f"Robot {robot.id} timed out", {"url": url}) from exc
+        except httpx.HTTPError as exc:
+            raise AgentError(503, "agent_unreachable", f"Robot {robot.id} is unreachable", {"url": url}) from exc
+        data = self._json(response)
+        if response.is_error:
+            message = data.get("message") or data.get("error") or response.reason_phrase
+            status = 409 if response.status_code == 409 else 502
+            raise AgentError(status, "agent_rejected", str(message), {"agent_status": response.status_code})
+        if isinstance(data, dict) and data.get("ok") is False:
+            raise AgentError(409, "agent_rejected", str(data.get("message") or "Agent rejected request"), data)
+        return data
+
+    async def export_map(self, robot: Robot, map_name: str) -> bytes:
+        url = f"{robot.base_url.rstrip('/')}/api/maps/export"
+        try:
+            response = await self.client.get(url, params={"name": map_name}, timeout=self.map_timeout_s)
+        except httpx.TimeoutException as exc:
+            raise AgentError(504, "agent_timeout", f"Map export from {robot.id} timed out") from exc
+        except httpx.HTTPError as exc:
+            raise AgentError(503, "agent_unreachable", f"Robot {robot.id} is unreachable") from exc
+        if response.is_error:
+            data = self._json(response)
+            raise AgentError(502, "map_export_failed", str(data.get("message") or response.reason_phrase))
+        return response.content
+
+    async def install_map(self, robot: Robot, bundle: bytes) -> dict[str, Any]:
+        url = f"{robot.base_url.rstrip('/')}/api/maps/install"
+        try:
+            response = await self.client.post(
+                url,
+                files={"bundle": ("map.zip", bundle, "application/zip")},
+                timeout=self.map_timeout_s,
+            )
+        except httpx.TimeoutException as exc:
+            raise AgentError(504, "agent_timeout", f"Map install on {robot.id} timed out") from exc
+        except httpx.HTTPError as exc:
+            raise AgentError(503, "agent_unreachable", f"Robot {robot.id} is unreachable") from exc
+        data = self._json(response)
+        if response.is_error or data.get("ok") is False:
+            raise AgentError(409 if response.status_code == 409 else 502, "map_install_failed", str(data.get("message") or response.reason_phrase), data)
+        return data
+
+    @staticmethod
+    def _json(response: httpx.Response) -> dict[str, Any]:
+        try:
+            value = response.json()
+            return value if isinstance(value, dict) else {"data": value}
+        except Exception:
+            return {"message": response.text[:1000]}

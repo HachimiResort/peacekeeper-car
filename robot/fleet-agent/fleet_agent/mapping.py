@@ -74,6 +74,23 @@ class MappingService:
         width, height, pixels = self._read_pgm(Path(info["pgm"]))
         return self._encode_png(width, height, pixels)
 
+    def export_bundle(self, name: str) -> bytes:
+        from .map_bundle import build_map_bundle
+
+        info = self.latest_map(name)
+        yaml_path = Path(info["yaml"])
+        pgm_path = Path(info["pgm"])
+        if not yaml_path.is_file():
+            raise FileNotFoundError(f"Map metadata '{yaml_path.name}' was not found")
+        if not pgm_path.is_file():
+            raise FileNotFoundError(f"Map image '{pgm_path.name}' was not found")
+        return build_map_bundle(yaml_path, pgm_path, info["name"])
+
+    def install_bundle(self, payload: bytes, max_bytes: int) -> dict:
+        from .map_bundle import install_map_bundle
+
+        return install_map_bundle(payload, self.maps_dir, max_bytes)
+
     def map_meta(self, name: Optional[str] = None) -> dict:
         info = self.latest_map(name=name)
         yaml_path = Path(info["yaml"])
@@ -148,19 +165,24 @@ class MappingService:
         width = int(tokens[1])
         height = int(tokens[2])
         max_value = int(tokens[3])
-        while offset < len(data) and data[offset] in b" \t\r\n":
-            offset += 1
-
         if magic == b"P5":
+            if offset >= len(data) or data[offset] not in b" \t\r\n":
+                raise ValueError(f"PGM header has no payload separator in {path}")
+            offset += 2 if data[offset:offset + 2] == b"\r\n" else 1
             pixels = data[offset:offset + width * height]
         else:
             values = [
                 int(part)
                 for part in re.sub(rb"#.*", b"", data[offset:]).split()
             ]
-            pixels = bytes(values[:width * height])
+            if max_value <= 0:
+                raise ValueError(f"Invalid PGM max value in {path}")
+            pixels = bytes(
+                max(0, min(255, int(value * 255 / max_value)))
+                for value in values[:width * height]
+            )
 
-        if max_value != 255 and max_value > 0:
+        if magic == b"P5" and max_value != 255 and max_value > 0:
             pixels = bytes(int(value * 255 / max_value) for value in pixels)
         if len(pixels) != width * height:
             raise ValueError(f"PGM payload size mismatch in {path}")

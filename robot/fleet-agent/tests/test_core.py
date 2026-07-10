@@ -1,10 +1,14 @@
 import subprocess
+import hashlib
+import io
+import json
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -23,6 +27,8 @@ import fleet_agent.patrol as patrol_module
 from fleet_agent.command_arbiter import CommandArbiter
 from fleet_agent.config import AgentConfig, PatrolConfig, ProcessConfig, SafetyConfig, load_config
 from fleet_agent.mapping import MappingService
+from fleet_agent.map_bundle import install_map_bundle
+from fleet_agent import map_bundle as map_bundle_module
 from fleet_agent.navigation import NavigationService
 from fleet_agent.patrol import PatrolService
 from fleet_agent.rosmaster_control import RosmasterController
@@ -284,6 +290,49 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(meta["resolution"], 0.05)
             self.assertAlmostEqual(map_x, -9.975)
             self.assertAlmostEqual(map_y, -19.925)
+
+    def test_binary_pgm_keeps_whitespace_valued_first_pixel(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "map.pgm"
+            path.write_bytes(b"P5\n2 1\n255\n" + bytes([10, 200]))
+
+            width, height, pixels = MappingService._read_pgm(path)
+
+            self.assertEqual((width, height), (2, 1))
+            self.assertEqual(pixels, bytes([10, 200]))
+
+    @unittest.skipIf(map_bundle_module.yaml is None, "PyYAML is not installed")
+    def test_map_bundle_install_is_versioned_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            maps_dir = Path(temp_dir)
+            yaml_bytes = b"image: map.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n"
+            image_bytes = b"P5\n2 1\n255\n" + bytes([10, 200])
+            yaml_hash = hashlib.sha256(yaml_bytes).hexdigest()
+            image_hash = hashlib.sha256(image_bytes).hexdigest()
+            bundle_hash = hashlib.sha256(f"{yaml_hash}:{image_hash}".encode("ascii")).hexdigest()
+            manifest = {
+                "schema_version": 1,
+                "logical_name": "lab",
+                "version": 2,
+                "yaml_file": "map.yaml",
+                "image_file": "map.pgm",
+                "yaml_sha256": yaml_hash,
+                "image_sha256": image_hash,
+                "bundle_sha256": bundle_hash,
+            }
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, "w") as archive:
+                archive.writestr("manifest.json", json.dumps(manifest))
+                archive.writestr("map.yaml", yaml_bytes)
+                archive.writestr("map.pgm", image_bytes)
+
+            first = install_map_bundle(output.getvalue(), maps_dir, 1024 * 1024)
+            second = install_map_bundle(output.getvalue(), maps_dir, 1024 * 1024)
+
+            self.assertEqual(first["name"], "lab__v2")
+            self.assertFalse(first["idempotent"])
+            self.assertTrue(second["idempotent"])
+            self.assertTrue((maps_dir / "lab__v2.yaml").exists())
 
     def test_navigation_start_requires_existing_map(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -618,14 +667,51 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(sink.stop_count, 1)
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
+    def test_api_requires_shared_token_when_enabled(self):
+        config = tracking_config()
+        config.security.require_token = True
+        config.security.shared_token = "test-shared-token"
+        fake_pm = FakeManagedProcessManager(config)
+        fake_controller = FakeMotionController()
+        fake_subscriber = FakeDirectSubscriber()
+        with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
+                patch.object(app_module, "RosmasterController", return_value=fake_controller), \
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
+            app = app_module.create_app(config)
+            with TestClient(app) as client:
+                self.assertEqual(client.get("/api/status").status_code, 401)
+                self.assertEqual(
+                    client.get("/api/status?token=test-shared-token").status_code,
+                    401,
+                )
+                response = client.get(
+                    "/api/status",
+                    headers={"X-Peacekeeper-Token": "test-shared-token"},
+                )
+                self.assertEqual(response.status_code, 200)
+
+    @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
+    def test_required_token_must_be_configured(self):
+        config = tracking_config()
+        config.security.require_token = True
+        config.security.shared_token = ""
+
+        with self.assertRaisesRegex(RuntimeError, "PEACEKEEPER_SHARED_TOKEN"):
+            app_module.create_app(config)
+
+    @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_tracking_mode_rejects_nonzero_manual_cmd(self):
         config = tracking_config()
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
                 patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
             with TestClient(app) as client:
                 self.assertEqual(client.post("/api/tracking/laser/start").status_code, 200)
@@ -642,8 +728,10 @@ class CoreTests(unittest.TestCase):
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
                 patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
             with TestClient(app) as client:
                 self.assertEqual(client.post("/api/tracking/laser/start").status_code, 200)

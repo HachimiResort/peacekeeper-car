@@ -11,6 +11,7 @@ docker run --rm -it \
   --name "$NAME" \
   --net=host \
   --privileged \
+  -e PEACEKEEPER_SHARED_TOKEN="${PEACEKEEPER_SHARED_TOKEN:-}" \
   -v /dev:/dev \
   -v "$REPO_ON_HOST:$REPO_IN_CONTAINER" \
   "$IMAGE" \

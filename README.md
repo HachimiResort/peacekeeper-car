@@ -2,10 +2,13 @@
 
 Peacekeeper is the robot-side software for the forest patrol smart car project.
 
-This repository starts with the v1 vehicle execution layer:
+This repository now contains the vehicle execution layer and the first central
+control-plane service:
 
 - `robot/fleet-agent`: one HTTP/WebSocket/Web demo service running on each car.
 - `robot/ros2_ws`: the local ROS2 capability layer managed by the agent.
+- `apps/mission-api`: the authenticated business API, PostgreSQL registry,
+  mission/event store, status aggregator, and map distribution service.
 
 The v1 loop is intentionally narrow and demonstrable:
 
@@ -31,6 +34,10 @@ only process that writes `/dev/myserial`. It subscribes to ROS2 `/cmd_vel`,
 arbitrates that stream against manual control and emergency stop, then calls
 `Rosmaster_Lib`.
 
+`mission-api` is the formal entry point for operator clients. The fleet-agent
+homepage remains an engineering/debug console and is protected by the same
+shared Token in direct deployments.
+
 ## Quick Start
 
 On the car, run inside the `icar/ros-foxy:1.0.2` environment:
@@ -38,6 +45,7 @@ On the car, run inside the `icar/ros-foxy:1.0.2` environment:
 ```bash
 cd /root/peacekeeper-car/robot/fleet-agent
 python3 -m pip install -r requirements.txt
+export PEACEKEEPER_SHARED_TOKEN='<same-token-as-mission-api>'
 python3 agent.py --config ../../configs/fleet-agent.direct.yaml
 ```
 
@@ -48,6 +56,18 @@ http://<car-ip>:8001
 ```
 
 For Docker host launch guidance, see `robot/fleet-agent/run_in_docker.sh`.
+
+On the control computer:
+
+```bash
+cp .env.example .env
+# Edit .env and configs/fleet/cars.yaml.
+docker compose up -d --build
+curl http://127.0.0.1:28080/health/ready
+```
+
+See `apps/mission-api/README.md` for registry, authentication, and map
+distribution flows.
 
 ## Main Interfaces
 

@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-peacekeeper}
+      POSTGRES_USER: ${POSTGRES_USER:-peacekeeper}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "55433:5432"
+    volumes:
+      - mission_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-peacekeeper} -d ${POSTGRES_DB:-peacekeeper}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mission-api:
+    build:
+      context: ./apps/mission-api
+    restart: unless-stopped
+    environment:
+      PEACEKEEPER_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-peacekeeper}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-peacekeeper}
+      PEACEKEEPER_SHARED_TOKEN: ${PEACEKEEPER_SHARED_TOKEN:?set PEACEKEEPER_SHARED_TOKEN in .env}
+      PEACEKEEPER_CARS_FILE: /app/config/cars.yaml
+      PEACEKEEPER_MAP_STORAGE_DIR: /var/lib/peacekeeper/maps
+      PEACEKEEPER_STATUS_POLL_S: ${STATUS_POLL_S:-1.0}
+      PEACEKEEPER_STATUS_TIMEOUT_S: ${STATUS_TIMEOUT_S:-2.0}
+    ports:
+      - "28080:8080"
+    volumes:
+      - mission_map_data:/var/lib/peacekeeper/maps
+      - ./configs/fleet/cars.yaml:/app/config/cars.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  mission_pg_data:
+  mission_map_data:

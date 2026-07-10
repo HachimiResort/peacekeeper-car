@@ -1,0 +1,10 @@
+robots:
+  - id: car_1
+    name: Peacekeeper Car 1
+    base_url: http://10.60.162.192:8001
+    role: leader
+    enabled: false
+    capabilities:
+      mapping: true
+      navigation: true
+      patrol: true

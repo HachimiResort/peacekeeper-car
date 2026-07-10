@@ -283,6 +283,12 @@
     </div>
     <aside>
       <section>
+        <h2>Security</h2>
+        <label>Shared Token <input id="sharedToken" type="password" autocomplete="off" placeholder="X-Peacekeeper-Token"></label>
+        <button id="saveToken" class="primary wide" style="margin-top: 8px;">Save Token For This Tab</button>
+        <div id="securityStatus" class="nav-summary"></div>
+      </section>
+      <section>
         <h2>Manual Control</h2>
         <label>Speed <input id="speed" type="range" min="0.05" max="0.45" step="0.01" value="0.2"><span id="speedValue">0.20</span></label>
         <div class="grid" style="margin-top: 10px;">
@@ -398,6 +404,12 @@
     const patrolLoop = document.getElementById("patrolLoop");
     const patrolDraftSummary = document.getElementById("patrolDraft");
     const patrolStatus = document.getElementById("patrolStatus");
+    const sharedToken = document.getElementById("sharedToken");
+    const securityStatus = document.getElementById("securityStatus");
+    const tokenRequired = {{ 'true' if require_token else 'false' }};
+    let apiToken = sessionStorage.getItem("peacekeeperSharedToken") || "";
+    sharedToken.value = apiToken;
+    securityStatus.textContent = tokenRequired ? "Token required by this agent" : "Token optional in local mode";
     const activeKeys = new Set();
     const motionTtlMs = 1500;
     const motionPeriodMs = 100;
@@ -589,7 +601,7 @@
     async function postJson(url, body = {}) {
       const res = await fetch(url, {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: authHeaders({"Content-Type": "application/json"}),
         body: JSON.stringify(body)
       });
       const data = await res.json().catch(() => ({}));
@@ -602,7 +614,7 @@
     }
 
     async function getJson(url) {
-      const res = await fetch(url);
+      const res = await fetch(url, {headers: authHeaders()});
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         const err = new Error(data.message || res.statusText);
@@ -610,6 +622,25 @@
         throw err;
       }
       return data;
+    }
+
+    function authHeaders(extra = {}) {
+      if (!apiToken) return extra;
+      return {...extra, "X-Peacekeeper-Token": apiToken};
+    }
+
+    async function setAuthenticatedImage(element, url) {
+      const response = await fetch(url, {headers: authHeaders()});
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.message || response.statusText);
+      }
+      const blob = await response.blob();
+      const previous = element.dataset.objectUrl;
+      if (previous) URL.revokeObjectURL(previous);
+      const objectUrl = URL.createObjectURL(blob);
+      element.dataset.objectUrl = objectUrl;
+      element.src = objectUrl;
     }
 
     function setDisplayMode(mode) {
@@ -656,7 +687,7 @@
 
     async function loadMapMeta(name) {
       const query = name ? `?name=${encodeURIComponent(name)}` : "";
-      const meta = await fetch(`/api/mapping/meta${query}`).then((res) => res.json());
+      const meta = await getJson(`/api/mapping/meta${query}`);
       if (!meta.ok) throw new Error(meta.message || "Map metadata is not available");
       mapMeta = meta;
       selectedMapPoint = null;
@@ -878,7 +909,7 @@
     async function showMapPreview(name = "") {
       const query = name ? `?name=${encodeURIComponent(name)}&t=${Date.now()}` : `?t=${Date.now()}`;
       try {
-        const info = await fetch(`/api/mapping/latest${name ? `?name=${encodeURIComponent(name)}` : ""}`).then((res) => res.json());
+        const info = await getJson(`/api/mapping/latest${name ? `?name=${encodeURIComponent(name)}` : ""}`);
         if (!info.ok) throw new Error(info.message || "Map preview is not available");
         latestMapName = info.name || name;
         loadMapMeta(latestMapName).catch((err) => {
@@ -901,7 +932,7 @@
           samplePlaceholder.hidden = false;
           samplePlaceholder.textContent = "Map preview failed";
         };
-        mapFrame.src = `/api/mapping/preview.png${query}`;
+        await setAuthenticatedImage(mapFrame, `/api/mapping/preview.png${query}`);
       } catch (err) {
         mapFrame.hidden = true;
         mapMeta = null;
@@ -1031,7 +1062,7 @@
     patrolRoute.onchange = renderPatrolMarkers;
     document.getElementById("startLaserTracking").onclick = () => postJson("/api/tracking/laser/start").catch(alert);
     document.getElementById("stopLaserTracking").onclick = () => postJson("/api/tracking/laser/stop").catch(alert);
-    document.getElementById("sampleCamera").onclick = () => {
+    document.getElementById("sampleCamera").onclick = async () => {
       const now = new Date();
       sampleFrame.onload = () => {
         samplePlaceholder.hidden = true;
@@ -1045,7 +1076,11 @@
         samplePlaceholder.hidden = false;
         samplePlaceholder.textContent = "Camera sample failed";
       };
-      sampleFrame.src = `/api/video/sample.jpg?t=${Date.now()}`;
+      try {
+        await setAuthenticatedImage(sampleFrame, `/api/video/sample.jpg?t=${Date.now()}`);
+      } catch (error) {
+        sampleFrame.onerror();
+      }
     };
     document.getElementById("snapshot").onclick = () => postJson("/api/video/snapshot").then((r) => alert(r.path || r.message)).catch(alert);
     document.getElementById("stopAll").onclick = () => postJson("/api/process/stop_all").catch(alert);
@@ -1054,7 +1089,8 @@
 
     function connectWs() {
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      const query = apiToken ? `?token=${encodeURIComponent(apiToken)}` : "";
+      const ws = new WebSocket(`${proto}://${location.host}/ws${query}`);
       ws.onopen = () => {
         dotEl.classList.remove("offline");
         dotEl.classList.add("online");
@@ -1080,6 +1116,12 @@
       drawOdomView();
       renderPatrolMarkers();
     });
+    document.getElementById("saveToken").onclick = () => {
+      apiToken = sharedToken.value.trim();
+      if (apiToken) sessionStorage.setItem("peacekeeperSharedToken", apiToken);
+      else sessionStorage.removeItem("peacekeeperSharedToken");
+      location.reload();
+    };
     refreshPatrolRoutes().catch((err) => {
       patrolStatus.textContent = `Patrol routes: ${err.message || err}`;
     });

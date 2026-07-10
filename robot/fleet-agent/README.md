@@ -11,6 +11,7 @@
 - Map saving through `map_saver_cli`.
 - Direct Nav2 startup, AMCL initial pose, and `NavigateToPose` goals.
 - Sequential multi-point patrol routes with pause, resume, cancel, dwell, and loop control.
+- Authenticated map bundle export and atomic, versioned map installation.
 
 The web UI does not auto-stream camera video. It requests a single JPEG only
 when `Sample` is clicked, reducing Wi-Fi load during ROS control and mapping.
@@ -82,6 +83,7 @@ Inside the car container:
 ```bash
 cd /root/peacekeeper-car/robot/fleet-agent
 python3 -m pip install -r requirements.txt
+export PEACEKEEPER_SHARED_TOKEN='<shared-token>'
 python3 agent.py --config ../../configs/fleet-agent.direct.yaml
 ```
 
@@ -97,6 +99,11 @@ Open:
 ```text
 http://<car-ip>:8001
 ```
+
+Direct and example configs require the Token. The debug page stores it only in
+the current tab's `sessionStorage`; API clients send it as
+`X-Peacekeeper-Token`, and WebSocket clients use `?token=`. Local test config
+may disable the requirement.
 
 ## Main API
 
@@ -123,6 +130,8 @@ POST /api/mapping/save
 POST /api/mapping/stop
 
 GET  /api/mapping/meta
+GET  /api/maps/export?name=<map-name>
+POST /api/maps/install
 GET  /api/navigation/status
 POST /api/navigation/start
 POST /api/navigation/initial_pose

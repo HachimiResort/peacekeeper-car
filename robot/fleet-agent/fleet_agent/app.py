@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from functools import partial
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -32,6 +33,10 @@ async def _run_blocking(func, *args, **kwargs):
 
 
 def create_app(config: AgentConfig) -> FastAPI:
+    if config.security.require_token and not config.security.shared_token:
+        raise RuntimeError(
+            "security.require_token is enabled but PEACEKEEPER_SHARED_TOKEN/shared_token is empty"
+        )
     state = RuntimeState()
     data_dir = Path(config.data_dir)
     run_dir = data_dir / "runs" / state.run_id
@@ -119,6 +124,20 @@ def create_app(config: AgentConfig) -> FastAPI:
         lifespan=lifespan,
     )
 
+    def token_matches(value: Optional[str]) -> bool:
+        return bool(value) and secrets.compare_digest(value, config.security.shared_token)
+
+    @app.middleware("http")
+    async def require_api_token(request: Request, call_next):
+        if config.security.require_token and request.url.path.startswith("/api/"):
+            supplied = request.headers.get("X-Peacekeeper-Token")
+            if not token_matches(supplied):
+                return JSONResponse(
+                    {"ok": False, "message": "Missing or invalid X-Peacekeeper-Token"},
+                    status_code=401,
+                )
+        return await call_next(request)
+
     def build_status() -> dict:
         process_status = process_manager.status()
         ros_status = cmd_vel.status()
@@ -196,6 +215,7 @@ def create_app(config: AgentConfig) -> FastAPI:
                 "request": request,
                 "agent_port": config.port,
                 "run_id": state.run_id,
+                "require_token": config.security.require_token,
             },
         )
 
@@ -205,6 +225,9 @@ def create_app(config: AgentConfig) -> FastAPI:
 
     @app.websocket("/ws")
     async def websocket_status(websocket: WebSocket):
+        if config.security.require_token and not token_matches(websocket.query_params.get("token")):
+            await websocket.close(code=4401, reason="Missing or invalid token")
+            return
         await websocket.accept()
         try:
             while True:
@@ -258,6 +281,55 @@ def create_app(config: AgentConfig) -> FastAPI:
         except Exception as exc:
             state.set_error(str(exc))
             return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
+
+    @app.get("/api/maps/export")
+    async def maps_export(name: str = Query(..., min_length=1)):
+        try:
+            safe_name = MappingService._safe_name(name)
+            bundle = await _run_blocking(mapping.export_bundle, safe_name)
+            return Response(
+                bundle,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{safe_name}.zip"',
+                },
+            )
+        except FileNotFoundError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
+        except (ValueError, OSError) as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+    @app.post("/api/maps/install")
+    async def maps_install(bundle: UploadFile = File(...)):
+        process_status = await _run_blocking(process_manager.status)
+        nav_status = await _run_blocking(navigation.status)
+        busy = (
+            state.mode in (Mode.MAPPING, Mode.SAVING_MAP, Mode.NAV_PATROL, Mode.LASER_TRACKING)
+            or process_status.get("slam", {}).get("status") == "running"
+            or nav_status.get("ready", False)
+            or await _run_blocking(patrol.is_active)
+        )
+        if busy:
+            return JSONResponse(
+                {"ok": False, "message": "Cannot install a map while SLAM, Nav2, patrol, or map saving is active"},
+                status_code=409,
+            )
+        payload = await bundle.read(config.security.max_map_bytes + 1)
+        if len(payload) > config.security.max_map_bytes:
+            return JSONResponse(
+                {"ok": False, "message": "Map bundle exceeds configured size limit"},
+                status_code=413,
+            )
+        try:
+            return await _run_blocking(
+                mapping.install_bundle,
+                payload,
+                config.security.max_map_bytes,
+            )
+        except FileExistsError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+        except (ValueError, OSError) as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
     @app.post("/api/control/cmd_vel")
     async def control_cmd_vel(payload: CmdVelRequest):
@@ -397,7 +469,6 @@ def create_app(config: AgentConfig) -> FastAPI:
             return JSONResponse({"ok": False, "message": "laser_tracker process is not configured"}, status_code=500)
         try:
             await _run_blocking(cmd_vel.stop)
-            await _run_blocking(direct_cmd_vel.start)
             await _run_blocking(process_manager.start, "lidar")
             result = await _run_blocking(cmd_vel.enable_ros_cmd_vel, Mode.LASER_TRACKING)
             if not result["ok"]:

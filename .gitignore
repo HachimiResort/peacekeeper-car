@@ -6,10 +6,12 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+.env
 
 # Runtime artifacts from robot-side runs.
 data/runs/
 data/maps/
 data/logs/
+apps/mission-api/.pytest_cache/
 *.mp4
 *.avi

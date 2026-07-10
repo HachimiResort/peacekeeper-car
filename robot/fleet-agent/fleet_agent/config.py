@@ -1,6 +1,7 @@
 """Configuration loading for the fleet-agent."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
@@ -82,6 +83,13 @@ class PatrolConfig:
 
 
 @dataclass
+class SecurityConfig:
+    require_token: bool = False
+    shared_token: str = ""
+    max_map_bytes: int = 64 * 1024 * 1024
+
+
+@dataclass
 class AgentConfig:
     host: str = "0.0.0.0"
     port: int = 8001
@@ -109,6 +117,7 @@ class AgentConfig:
     )
     mapping: MappingConfig = field(default_factory=MappingConfig)
     patrol: PatrolConfig = field(default_factory=PatrolConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -134,6 +143,7 @@ def _to_dict(config: AgentConfig) -> dict:
         "processes": {key: vars(value) for key, value in config.processes.items()},
         "mapping": vars(config.mapping),
         "patrol": vars(config.patrol),
+        "security": vars(config.security),
     }
 
 
@@ -158,12 +168,16 @@ def _from_dict(raw: dict) -> AgentConfig:
         processes=processes or AgentConfig().processes,
         mapping=MappingConfig(**raw.get("mapping", {})),
         patrol=PatrolConfig(**raw.get("patrol", {})),
+        security=SecurityConfig(**raw.get("security", {})),
     )
 
 
 def load_config(path: Optional[str] = None) -> AgentConfig:
     default = AgentConfig()
     if not path:
+        env_token = os.environ.get("PEACEKEEPER_SHARED_TOKEN")
+        if env_token:
+            default.security.shared_token = env_token
         return default
 
     if yaml is None:
@@ -174,4 +188,8 @@ def load_config(path: Optional[str] = None) -> AgentConfig:
         loaded = yaml.safe_load(handle) or {}
 
     merged = _deep_merge(_to_dict(default), loaded)
-    return _from_dict(merged)
+    config = _from_dict(merged)
+    env_token = os.environ.get("PEACEKEEPER_SHARED_TOKEN")
+    if env_token:
+        config.security.shared_token = env_token
+    return config

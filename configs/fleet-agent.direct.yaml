@@ -68,3 +68,8 @@ patrol:
   goal_timeout_s: 180
   cancel_timeout_s: 5
   poll_period_s: 0.2
+
+security:
+  require_token: true
+  shared_token: "yuyu_233"
+  max_map_bytes: 67108864
