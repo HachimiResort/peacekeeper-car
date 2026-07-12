@@ -8,6 +8,7 @@ import { useAsyncAction } from "../app/use-async-action"
 import { degreesToRadians } from "../api/client"
 import { MotionCommander } from "../api/motion"
 import type { MapDeployment, MapPoint, Robot, StoredMap } from "../api/types"
+import { CameraPreview } from "../components/camera-preview"
 import { LiveMapPreview } from "../components/live-map-preview"
 import { MapCanvas } from "../components/map-canvas"
 import { Badge, Button, Card, EmptyState, InlineActionStatus, JsonPanel, LoadingBlock, PageHeader, StatusDot, fieldClass } from "../components/ui"
@@ -61,6 +62,7 @@ export function RobotDetailPage() {
   const [speed, setSpeed] = useState(0.2)
   const [mapName, setMapName] = useState("forest_map")
   const [activeDirection, setActiveDirection] = useState<Direction | null>(null)
+  const [cameraActive, setCameraActive] = useState(false)
   const [panelState, setPanelState] = useState<Partial<Record<PanelName, PanelState>>>({})
   const commander = useRef<MotionCommander | null>(null)
   const canDriveRef = useRef(false)
@@ -150,7 +152,7 @@ export function RobotDetailPage() {
 
   const live = statuses[robot.id]
   const currentRobot = live ? { ...robot, online: Boolean(live.online), runtime_status: (live.status as Record<string, unknown>) || robot.runtime_status, last_seen: String(live.last_seen || robot.last_seen || "") || null } : robot
-  const runtime = currentRobot.runtime_status as { mode?: string; processes?: Record<string, string>; navigation?: Record<string, unknown>; patrol?: Record<string, unknown>; last_error?: string } | null
+  const runtime = currentRobot.runtime_status as { mode?: string; processes?: Record<string, string>; navigation?: Record<string, unknown>; patrol?: Record<string, unknown>; video?: { streaming?: boolean; device?: string }; last_error?: string } | null
   const navigation = runtime?.navigation || {}
   const patrol = runtime?.patrol || {}
   const mode = runtime?.mode || "UNKNOWN"
@@ -168,6 +170,7 @@ export function RobotDetailPage() {
   const navigationBusy = ["navigation/start", "navigation/initial-pose", "navigation/goal"].some(actions.isPending)
   const patrolBusy = ["patrol/start", "patrol/pause", "patrol/resume"].some(actions.isPending)
   const unavailableReason = !currentRobot.enabled ? "车辆已停用" : !currentRobot.online ? "车辆离线" : mode === "EMERGENCY_STOP" ? "车辆处于急停状态" : ""
+  const cameraAvailable = currentRobot.enabled && currentRobot.online
 
   const confirmThen = async (input: { title: string; description: string; confirmLabel: string; tone?: "primary" | "danger" | "warning" }, callback: () => unknown | Promise<unknown>) => {
     if (await feedback.confirm(input)) await callback()
@@ -216,6 +219,15 @@ export function RobotDetailPage() {
         <div className="stack-actions"><Button variant="primary" loading={actions.isPending("mapping/start")} loadingText="正在启动" disabled={!controllable || mappingActive || mappingBusy} onClick={() => void perform("mapping/start")}><Play />开始建图</Button><Button loading={actions.isPending("mapping/stop")} loadingText="正在停止" disabled={!currentRobot.online || !mappingActive} onClick={() => void perform("mapping/stop")}><Square />停止 SLAM</Button><Button variant="warning" loading={actions.isPending("mapping/save")} loadingText="正在保存" disabled={!controllable || !mappingActive || !mapName.trim() || mappingBusy} onClick={() => void saveMap()}><Save />保存并导入中心</Button></div>
         {panelState.mapping ? <InlineActionStatus {...panelState.mapping} /> : <InlineActionStatus tone={mappingActive ? "success" : "info"} title={mappingActive ? "SLAM 正在运行" : "等待开始建图"} detail={!mapName.trim() ? "请先填写地图名称" : unavailableReason || undefined} />}
         <LiveMapPreview api={api!} robotId={robotId} active={mappingActive} />
+      </Card>
+
+      <Card className="panel span-2 camera-panel">
+        <div className="panel-head">
+          <div><h2>车载摄像头</h2><p>打开后按固定频率抓取单帧，适合通过中心端远程查看</p></div>
+          <Button variant={cameraActive ? "secondary" : "primary"} disabled={!cameraAvailable} onClick={() => setCameraActive((current) => !current)}>{cameraActive ? "关闭摄像头" : "打开摄像头"}</Button>
+        </div>
+        {!cameraAvailable && <InlineActionStatus tone="warning" title="摄像头暂不可用" detail={!currentRobot.enabled ? "车辆已停用，不能建立视频预览。" : "车辆离线，待重新上线后可打开摄像头。"} />}
+        <CameraPreview api={api!} robotId={robotId} active={cameraActive} online={currentRobot.online} device={runtime?.video?.device ? String(runtime.video.device) : undefined} streaming={runtime?.video?.streaming} />
       </Card>
 
       <Card className="panel span-2">

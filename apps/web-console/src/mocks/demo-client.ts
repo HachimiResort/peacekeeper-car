@@ -149,6 +149,10 @@ export class DemoMissionApi implements MissionApi {
     }
   }
   async liveMapPreview(_robotId: string) { return this.mapPreview("map-forest-v3") }
+  async videoSample(_robotId: string) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="100%" height="100%" fill="#0f1b17"/><rect x="70" y="70" width="820" height="400" rx="28" fill="#1d3a31" stroke="#78c29b" stroke-width="6"/><circle cx="225" cy="270" r="84" fill="#2f7659"/><circle cx="225" cy="270" r="45" fill="#9fe0bc"/><path d="M410 215h300M410 270h210M410 325h265" stroke="#d8efe3" stroke-width="18" stroke-linecap="round"/><text x="72" y="40" font-family="sans-serif" font-size="28" fill="#9fe0bc">camera demo</text></svg>`
+    return new Blob([svg], { type: "image/svg+xml" })
+  }
   async mapDownload(id: string) { return new Blob([`demo bundle ${id}`], { type: "application/zip" }) }
   async uploadMap(file: File, logicalName?: string) { return { ok: true, demo: true, filename: file.name, logical_name: logicalName } }
   async importMap(payload: { robot_id: string; map_name: string; logical_name?: string }) { return { ok: true, demo: true, ...payload } }

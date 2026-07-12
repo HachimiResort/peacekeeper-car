@@ -138,6 +138,7 @@ export interface MissionApi {
   vehicleMapPreview(robotId: string, mapName: string): Promise<Blob>
   liveMapStatus(robotId: string): Promise<LiveMapStatus>
   liveMapPreview(robotId: string): Promise<Blob>
+  videoSample(robotId: string): Promise<Blob>
   mapDownload(id: string): Promise<Blob>
   uploadMap(file: File, logicalName?: string): Promise<JsonObject>
   importMap(payload: { robot_id: string; map_name: string; logical_name?: string }): Promise<JsonObject>

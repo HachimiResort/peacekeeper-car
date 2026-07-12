@@ -83,3 +83,23 @@ async def test_agent_client_reads_saved_map_preview_with_name():
 
     assert image.startswith(b"\x89PNG")
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_client_reads_video_sample_as_bytes():
+    async def handler(request: httpx.Request):
+        assert request.url.path == "/api/video/sample.jpg"
+        return httpx.Response(200, content=b"\xff\xd8\xffsample", headers={"content-type": "image/jpeg"})
+
+    client = FleetAgentClient("test-token", 2, 5, 120)
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        headers={"X-Peacekeeper-Token": "test-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    robot = Robot(id="car_1", name="Car 1", base_url="http://car-1", capabilities={})
+
+    image = await client.video_sample(robot)
+
+    assert image.startswith(b"\xff\xd8\xff")
+    await client.close()
