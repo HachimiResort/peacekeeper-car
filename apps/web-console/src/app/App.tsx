@@ -9,6 +9,7 @@ import { MapsPage } from "../features/maps-page"
 import { MapDetailPage } from "../features/map-detail-page"
 import { MissionsPage } from "../features/missions-page"
 import { EventsPage } from "../features/events-page"
+import { FleetLabPage } from "../features/fleet-lab-page"
 
 function RequireSession() {
   const { connected } = useSession()
@@ -28,6 +29,7 @@ export function App() {
         <Route path="maps/:mapId" element={<MapDetailPage />} />
         <Route path="missions" element={<MissionsPage />} />
         <Route path="events" element={<EventsPage />} />
+        <Route path="fleet-lab" element={<FleetLabPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

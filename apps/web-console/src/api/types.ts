@@ -79,6 +79,19 @@ export interface RuntimeStatusMessage {
   data?: JsonObject
 }
 
+export interface NavigationPose {
+  map_name: string
+  x: number
+  y: number
+  yaw: number
+}
+
+export interface StatusSubscriptionObserver {
+  onOpen?(): void
+  onClose?(): void
+  onError?(error: unknown): void
+}
+
 export interface LiveMapStatus {
   available: boolean
   ready: boolean
@@ -112,6 +125,11 @@ export interface MissionApi {
   createRobot(payload: Partial<Robot>): Promise<Robot>
   updateRobot(id: string, payload: Partial<Robot>): Promise<Robot>
   robotAction(id: string, path: string, payload?: JsonObject): Promise<JsonObject>
+  navigationStart(id: string, mapName: string): Promise<JsonObject>
+  navigationInitialPose(id: string, pose: NavigationPose): Promise<JsonObject>
+  navigationGoal(id: string, pose: NavigationPose): Promise<JsonObject>
+  navigationCancel(id: string): Promise<JsonObject>
+  navigationStop(id: string): Promise<JsonObject>
   fleetStop(): Promise<JsonObject>
   maps(): Promise<StoredMap[]>
   map(id: string): Promise<StoredMap>
@@ -129,5 +147,5 @@ export interface MissionApi {
   events(filters?: Record<string, string>): Promise<Page<RobotEvent>>
   alerts(filters?: Record<string, string>): Promise<Page<AlertRecord>>
   confirmAlert(id: string, confirmedBy: string, resolution?: string): Promise<JsonObject>
-  subscribeStatus(listener: (message: RuntimeStatusMessage) => void): () => void
+  subscribeStatus(listener: (message: RuntimeStatusMessage) => void, observer?: StatusSubscriptionObserver): () => void
 }

@@ -33,6 +33,20 @@ function renderCanvas(onPoint = vi.fn(), onYawChange = vi.fn(), onPointMove = vi
 }
 
 describe("MapCanvas marker direction controls", () => {
+  it("renders stable colored overlays and moves them by id", () => {
+    const api = { mapPreview: vi.fn().mockResolvedValue(new Blob(["map"])) } as unknown as MissionApi
+    const onOverlayMove = vi.fn()
+    render(<MapCanvas api={api} map={map} overlays={[{ id: "car-a:0", point, label: "A1", color: "#3b82f6", trackId: "car-a", order: 0 }]} onOverlayMove={onOverlayMove} />)
+    const marker = screen.getByRole("button", { name: "点位 A1" })
+    expect(marker).toHaveStyle({ backgroundColor: "rgb(59, 130, 246)" })
+    fireEvent.click(marker)
+    fireEvent.click(screen.getByRole("button", { name: "移动位置" }))
+    const moving = screen.getByRole("button", { name: "点位 A1，正在移动位置" })
+    fireEvent.pointerDown(moving, { button: 0, pointerId: 8, clientX: 112, clientY: 112 })
+    fireEvent.pointerMove(moving, { pointerId: 8, clientX: 240, clientY: 200 })
+    expect(onOverlayMove).toHaveBeenLastCalledWith("car-a:0", expect.objectContaining({ pixelX: 240, pixelY: 200 }))
+  })
+
   it("uses a blank map click only to dismiss a focused marker", () => {
     const { container, onPoint } = renderCanvas()
     const marker = screen.getByRole("button", { name: "点位 1" })

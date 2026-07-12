@@ -10,6 +10,8 @@ import type {
   RobotEvent,
   RuntimeStatusMessage,
   StoredMap,
+  NavigationPose,
+  StatusSubscriptionObserver,
   VehicleSavedMap,
 } from "./types"
 
@@ -75,6 +77,11 @@ export class HttpMissionApi implements MissionApi {
   async robotAction(id: string, path: string, payload: JsonObject = {}) {
     return this.request<JsonObject>(`/api/robots/${encodeURIComponent(id)}/${path}`, { method: "POST", body: JSON.stringify(payload) })
   }
+  async navigationStart(id: string, mapName: string) { return this.robotAction(id, "navigation/start", { map_name: mapName }) }
+  async navigationInitialPose(id: string, pose: NavigationPose) { return this.robotAction(id, "navigation/initial-pose", { ...pose }) }
+  async navigationGoal(id: string, pose: NavigationPose) { return this.robotAction(id, "navigation/goal", { ...pose }) }
+  async navigationCancel(id: string) { return this.robotAction(id, "navigation/cancel") }
+  async navigationStop(id: string) { return this.robotAction(id, "navigation/stop") }
   async fleetStop() { return this.request<JsonObject>("/api/fleet/stop", { method: "POST", body: "{}" }) }
   async maps() { return (await this.request<{ maps: StoredMap[] }>("/api/maps")).maps }
   async map(id: string) { return this.request<StoredMap>(`/api/maps/${id}`) }
@@ -115,7 +122,7 @@ export class HttpMissionApi implements MissionApi {
     return this.request<JsonObject>(`/api/alerts/${id}/confirm`, { method: "POST", body: JSON.stringify({ confirmed_by: confirmedBy, resolution: resolution || null }) })
   }
 
-  subscribeStatus(listener: (message: RuntimeStatusMessage) => void) {
+  subscribeStatus(listener: (message: RuntimeStatusMessage) => void, observer: StatusSubscriptionObserver = {}) {
     let socket: WebSocket | null = null
     let stopped = false
     let attempt = 0
@@ -124,9 +131,14 @@ export class HttpMissionApi implements MissionApi {
       if (stopped) return
       const protocol = location.protocol === "https:" ? "wss:" : "ws:"
       socket = new WebSocket(`${protocol}//${location.host}/ws/status?token=${encodeURIComponent(this.token)}`)
-      socket.onopen = () => { attempt = 0 }
-      socket.onmessage = (event) => listener(JSON.parse(event.data) as RuntimeStatusMessage)
+      socket.onopen = () => { attempt = 0; observer.onOpen?.() }
+      socket.onmessage = (event) => {
+        try { listener(JSON.parse(event.data) as RuntimeStatusMessage) }
+        catch (error) { observer.onError?.(error) }
+      }
+      socket.onerror = (error) => observer.onError?.(error)
       socket.onclose = () => {
+        observer.onClose?.()
         if (stopped) return
         const delay = reconnectDelay(attempt++)
         timer = window.setTimeout(connect, delay)

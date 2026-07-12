@@ -1,4 +1,4 @@
-import type { AlertRecord, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StoredMap, VehicleSavedMap } from "../api/types"
+import type { AlertRecord, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StatusSubscriptionObserver, StoredMap, VehicleSavedMap } from "../api/types"
 
 const now = new Date()
 const iso = (minutes = 0) => new Date(now.getTime() - minutes * 60_000).toISOString()
@@ -7,12 +7,12 @@ const robots: Robot[] = [
   {
     id: "car_1", name: "苍松一号", base_url: "http://10.60.162.192:8001", role: "leader", enabled: true,
     capabilities: { mapping: true, navigation: true, patrol: true }, last_seen: iso(), online: true,
-    runtime_status: { mode: "NAV_PATROL", processes: { lidar: "running", slam: "stopped" }, navigation: { action_state: "active", current_map: "forest_lab__v3" }, patrol: { state: "running", current_index: 1, total_points: 4 }, ros: { last_speed: 25, publisher_ready: true } },
+    runtime_status: { mode: "IDLE", processes: { lidar: "running", slam: "stopped", nav2: "running" }, navigation: { ready: true, action_state: "running", current_map: "forest_lab__v3", active_goal_id: null }, patrol: { state: "idle", current_index: 0, total_points: 0 }, ros: { last_speed: 25, publisher_ready: true } },
   },
   {
     id: "car_2", name: "云杉二号", base_url: "http://10.60.162.193:8001", role: "wing", enabled: true,
     capabilities: { mapping: true, navigation: true, patrol: true }, last_seen: iso(2), online: true,
-    runtime_status: { mode: "IDLE", processes: { lidar: "stopped", slam: "stopped" }, navigation: { action_state: "idle" }, patrol: { state: "idle" }, ros: { last_speed: 20, publisher_ready: true } },
+    runtime_status: { mode: "IDLE", processes: { lidar: "running", slam: "stopped", nav2: "running" }, navigation: { ready: true, action_state: "running", current_map: "forest_lab__v3", active_goal_id: null }, patrol: { state: "idle" }, ros: { last_speed: 20, publisher_ready: true } },
   },
   {
     id: "car_3", name: "冷杉三号", base_url: "http://10.60.162.194:8001", role: "reserve", enabled: true,
@@ -52,6 +52,13 @@ function page<T>(items: T[], filters: Record<string, string> = {}): Page<T> {
 }
 
 export class DemoMissionApi implements MissionApi {
+  private listeners = new Set<(message: RuntimeStatusMessage) => void>()
+  private goalSequence = 0
+
+  private emit(robot: Robot) {
+    const message: RuntimeStatusMessage = { type: "robot_status", robot_id: robot.id, data: { online: robot.online, last_seen: new Date().toISOString(), status: robot.runtime_status } }
+    this.listeners.forEach((listener) => listener(message))
+  }
   async health() { return true }
   async overview(): Promise<Overview> {
     return {
@@ -76,8 +83,41 @@ export class DemoMissionApi implements MissionApi {
     if (path === "control/stop") status.mode = "IDLE"
     if (path === "mapping/start") status.mode = "MAPPING"
     if (path === "mapping/stop") status.mode = "IDLE"
+    if (path === "navigation/start") status.navigation = { ready: true, current_map: payload.map_name, action_state: "running", active_goal_id: null }
+    if (path === "navigation/initial-pose") status.navigation = { ...(status.navigation as JsonObject), initial_pose: payload }
+    if (path === "navigation/cancel") status.navigation = { ...(status.navigation as JsonObject), action_state: "canceled", active_goal_id: null }
+    if (path === "navigation/stop") status.navigation = { ready: false, current_map: null, action_state: "idle", active_goal_id: null }
+    this.emit(robot)
     return { ok: true, demo: true, path, payload }
   }
+  async navigationStart(id: string, mapName: string) { return this.robotAction(id, "navigation/start", { map_name: mapName }) }
+  async navigationInitialPose(id: string, pose: NavigationPose) { return this.robotAction(id, "navigation/initial-pose", { ...pose }) }
+  async navigationGoal(id: string, pose: NavigationPose) {
+    const robot = robots.find((item) => item.id === id); if (!robot) throw new Error("车辆不存在")
+    const status = (robot.runtime_status ||= {}) as JsonObject
+    const goalId = `demo-nav-${++this.goalSequence}`
+    status.mode = "NAV_PATROL"
+    status.navigation = { ...(status.navigation as JsonObject), ready: true, current_map: pose.map_name, action_state: "active", active_goal_id: goalId, current_goal: { id: goalId, ...pose }, feedback: { goal_id: goalId, distance_remaining: 2.4 } }
+    this.emit(robot)
+    window.setTimeout(() => {
+      const navigation = status.navigation as JsonObject
+      if (navigation.active_goal_id !== goalId) return
+      navigation.feedback = { goal_id: goalId, distance_remaining: 0.7 }
+      this.emit(robot)
+    }, id === "car_1" ? 450 : 750)
+    window.setTimeout(() => {
+      const navigation = status.navigation as JsonObject
+      if (navigation.active_goal_id !== goalId) return
+      navigation.action_state = "succeeded"
+      navigation.active_goal_id = null
+      navigation.feedback = { goal_id: goalId, distance_remaining: 0 }
+      navigation.last_result = { goal_id: goalId, state: "succeeded", error: null }
+      this.emit(robot)
+    }, id === "car_1" ? 900 : 1400)
+    return { mission_id: `demo-mission-${goalId}`, result: { ok: true, goal_id: goalId } }
+  }
+  async navigationCancel(id: string) { return this.robotAction(id, "navigation/cancel") }
+  async navigationStop(id: string) { return this.robotAction(id, "navigation/stop") }
   async fleetStop() { robots.forEach((robot) => { if (robot.runtime_status) robot.runtime_status.mode = "IDLE" }); return { ok: true, demo: true } }
   async maps() { return structuredClone(maps) }
   async map(id: string) { const value = maps.find((item) => item.id === id); if (!value) throw new Error("地图不存在"); return structuredClone(value) }
@@ -118,9 +158,11 @@ export class DemoMissionApi implements MissionApi {
   async events(filters: Record<string, string> = {}) { return page(events.filter((item) => (!filters.robot_id || item.robot_id === filters.robot_id) && (!filters.severity || item.severity === filters.severity) && (!filters.event_type || item.event_type === filters.event_type)), filters) }
   async alerts(filters: Record<string, string> = {}) { return page(alerts.filter((item) => (!filters.robot_id || item.event.robot_id === filters.robot_id) && (!filters.state || item.state === filters.state)), filters) }
   async confirmAlert(id: string, confirmedBy: string, resolution?: string) { const value = alerts.find((item) => item.id === id); if (value) Object.assign(value, { state: "confirmed", confirmed_by: confirmedBy, confirmed_at: new Date().toISOString(), resolution: resolution || null }); return { ok: true, demo: true } }
-  subscribeStatus(listener: (message: RuntimeStatusMessage) => void) {
+  subscribeStatus(listener: (message: RuntimeStatusMessage) => void, observer: StatusSubscriptionObserver = {}) {
+    this.listeners.add(listener)
+    observer.onOpen?.()
     listener({ type: "snapshot", robots: Object.fromEntries(robots.map((robot) => [robot.id, { online: robot.online, status: robot.runtime_status }])) })
     const timer = window.setInterval(() => listener({ type: "robot_status", robot_id: "car_1", data: { online: true, status: robots[0].runtime_status } }), 5000)
-    return () => window.clearInterval(timer)
+    return () => { window.clearInterval(timer); this.listeners.delete(listener); observer.onClose?.() }
   }
 }
