@@ -73,6 +73,14 @@ class FleetAgentClient:
             "live_map_preview_failed",
         )
 
+    async def video_sample(self, robot: Robot) -> bytes:
+        return await self._binary_get(
+            robot,
+            "/api/video/sample.jpg",
+            self.control_timeout_s,
+            "video_sample_failed",
+        )
+
     async def saved_maps(self, robot: Robot) -> dict[str, Any]:
         return await self.request(robot, "GET", "/api/maps/saved", timeout_s=self.status_timeout_s)
 

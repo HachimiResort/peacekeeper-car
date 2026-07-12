@@ -160,6 +160,19 @@ async def mapping_live_preview(robot_id: str, request: Request, session: AsyncSe
     )
 
 
+@router.get("/{robot_id}/video/sample.jpg")
+async def video_sample(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    image = await request.app.state.agent_client.video_sample(robot)
+    return Response(
+        image,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
 @router.get("/{robot_id}/maps/saved")
 async def saved_maps(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
     robot = await get_robot_or_404(session, robot_id)
