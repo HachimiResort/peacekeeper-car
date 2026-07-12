@@ -79,6 +79,31 @@ export interface RuntimeStatusMessage {
   data?: JsonObject
 }
 
+export interface LiveMapStatus {
+  available: boolean
+  ready: boolean
+  has_map: boolean
+  topic: string
+  message_count: number
+  last_received_at: number | null
+  age_s: number | null
+  width: number
+  height: number
+  resolution: number
+  origin: number[]
+  frame_id: string
+  last_error: string | null
+  spin_thread_alive: boolean
+}
+
+export interface VehicleSavedMap {
+  name: string
+  yaml: string
+  pgm: string
+  updated_at: number
+  size_bytes: number
+}
+
 export interface MissionApi {
   health(): Promise<boolean>
   overview(): Promise<Overview>
@@ -91,6 +116,10 @@ export interface MissionApi {
   maps(): Promise<StoredMap[]>
   map(id: string): Promise<StoredMap>
   mapPreview(id: string): Promise<Blob>
+  vehicleMaps(robotId: string): Promise<VehicleSavedMap[]>
+  vehicleMapPreview(robotId: string, mapName: string): Promise<Blob>
+  liveMapStatus(robotId: string): Promise<LiveMapStatus>
+  liveMapPreview(robotId: string): Promise<Blob>
   mapDownload(id: string): Promise<Blob>
   uploadMap(file: File, logicalName?: string): Promise<JsonObject>
   importMap(payload: { robot_id: string; map_name: string; logical_name?: string }): Promise<JsonObject>

@@ -69,6 +69,25 @@ class MappingService:
             "exists": True,
         }
 
+    def saved_maps(self) -> List[dict]:
+        """List complete, locally saved map pairs without reading image payloads."""
+        records = []
+        for yaml_path in self.maps_dir.glob("*.yaml"):
+            pgm_path = yaml_path.with_suffix(".pgm")
+            if not pgm_path.is_file():
+                continue
+            modified_at = max(yaml_path.stat().st_mtime, pgm_path.stat().st_mtime)
+            records.append(
+                {
+                    "name": yaml_path.stem,
+                    "yaml": str(yaml_path),
+                    "pgm": str(pgm_path),
+                    "updated_at": modified_at,
+                    "size_bytes": yaml_path.stat().st_size + pgm_path.stat().st_size,
+                }
+            )
+        return sorted(records, key=lambda item: item["updated_at"], reverse=True)
+
     def render_map_png(self, name: Optional[str] = None) -> bytes:
         info = self.latest_map(name=name)
         width, height, pixels = self._read_pgm(Path(info["pgm"]))

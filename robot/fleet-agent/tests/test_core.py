@@ -32,7 +32,7 @@ from fleet_agent import map_bundle as map_bundle_module
 from fleet_agent.navigation import NavigationService
 from fleet_agent.patrol import PatrolService
 from fleet_agent.rosmaster_control import RosmasterController
-from fleet_agent.ros_control import CmdVelPublisher, DirectCmdVelSubscriber, DirectOdomPublisher
+from fleet_agent.ros_control import CmdVelPublisher, DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from fleet_agent.state import Mode, RuntimeState
 from fleet_agent.video import VideoService
 
@@ -84,6 +84,10 @@ class FakeManagedProcessManager:
     def topic_active(self, topic):
         del topic
         return False
+
+    def wait_for_topic(self, topic, timeout_s=10.0, poll_s=0.5):
+        del timeout_s, poll_s
+        return self.topic_active(topic)
 
 
 class FakeMotionController:
@@ -290,6 +294,20 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(meta["resolution"], 0.05)
             self.assertAlmostEqual(map_x, -9.975)
             self.assertAlmostEqual(map_y, -19.925)
+
+    def test_saved_maps_only_lists_complete_yaml_pgm_pairs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            maps_dir = Path(temp_dir) / "maps"
+            maps_dir.mkdir()
+            (maps_dir / "complete.yaml").write_text("image: complete.pgm\n", encoding="utf-8")
+            (maps_dir / "complete.pgm").write_bytes(b"P5\n1 1\n255\n\x00")
+            (maps_dir / "partial.yaml").write_text("image: partial.pgm\n", encoding="utf-8")
+            service = MappingService(AgentConfig(data_dir=temp_dir), FakeProcessManager())
+
+            records = service.saved_maps()
+
+            self.assertEqual([item["name"] for item in records], ["complete"])
+            self.assertGreater(records[0]["size_bytes"], 0)
 
     def test_binary_pgm_keeps_whitespace_valued_first_pixel(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -776,6 +794,7 @@ class CoreTests(unittest.TestCase):
                 response = client.post("/api/mapping/save", json={"name": "lab"})
                 self.assertEqual(response.status_code, 409)
                 self.assertIn("/map is not active", response.json()["message"])
+                self.assertIn("diagnostics", response.json())
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_navigation_start_missing_map_returns_404(self):
@@ -871,6 +890,37 @@ class CoreTests(unittest.TestCase):
         subscriber.handle_twist(TwistMessage())
         self.assertEqual(fake_controller.published, [])
         self.assertEqual(subscriber.status()["ignored_count"], 1)
+
+    def test_live_map_subscriber_renders_latest_occupancy_grid(self):
+        class Position:
+            x = -1.0
+            y = 2.5
+
+        class Origin:
+            position = Position()
+
+        class Info:
+            width = 2
+            height = 2
+            resolution = 0.05
+            origin = Origin()
+
+        class Header:
+            frame_id = "map"
+
+        class Grid:
+            info = Info()
+            header = Header()
+            data = [-1, 0, 50, 100]
+
+        subscriber = LiveMapSubscriber("/map")
+        subscriber._on_map(Grid())
+
+        status = subscriber.status()
+        self.assertTrue(status["has_map"])
+        self.assertEqual((status["width"], status["height"]), (2, 2))
+        self.assertEqual(status["origin"], [-1.0, 2.5, 0.0])
+        self.assertEqual(subscriber.render_png()[:8], b"\x89PNG\r\n\x1a\n")
 
 
 if __name__ == "__main__":

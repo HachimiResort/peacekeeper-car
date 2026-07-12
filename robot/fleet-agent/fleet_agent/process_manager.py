@@ -173,6 +173,17 @@ class ProcessManager:
         output = result.stdout.lower()
         return "publisher count: 0" not in output and ("publisher count:" in output or "type:" in output)
 
+    def wait_for_topic(self, topic: str, timeout_s: float = 10.0, poll_s: float = 0.5) -> bool:
+        """Wait briefly for ROS discovery instead of treating one probe as final."""
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while True:
+            if self.topic_active(topic):
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(max(0.05, float(poll_s)), remaining))
+
     def _refresh_one(self, managed: ManagedProcess) -> None:
         handle = managed.handle
         if not handle:

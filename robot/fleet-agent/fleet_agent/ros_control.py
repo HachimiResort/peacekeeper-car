@@ -8,6 +8,9 @@ import os
 import shlex
 import subprocess
 import sys
+import binascii
+import struct
+import zlib
 from importlib import import_module
 from typing import Optional
 
@@ -17,6 +20,7 @@ rclpy = None
 Twist = None
 TransformStamped = None
 Odometry = None
+OccupancyGrid = None
 TransformBroadcaster = None
 StaticTransformBroadcaster = None
 SingleThreadedExecutor = None
@@ -57,12 +61,13 @@ def _source_ros_environment(setup_paths) -> None:
 
 def _ensure_ros_python(setup_paths=()) -> bool:
     """Import rclpy and geometry_msgs after optional ROS environment setup."""
-    global rclpy, Twist, TransformStamped, Odometry, TransformBroadcaster, StaticTransformBroadcaster, SingleThreadedExecutor, _ros_import_error
+    global rclpy, Twist, TransformStamped, Odometry, OccupancyGrid, TransformBroadcaster, StaticTransformBroadcaster, SingleThreadedExecutor, _ros_import_error
     if (
         rclpy is not None
         and Twist is not None
         and TransformStamped is not None
         and Odometry is not None
+        and OccupancyGrid is not None
         and TransformBroadcaster is not None
         and StaticTransformBroadcaster is not None
         and SingleThreadedExecutor is not None
@@ -78,6 +83,7 @@ def _ensure_ros_python(setup_paths=()) -> bool:
         Twist = geometry_msgs.Twist
         TransformStamped = geometry_msgs.TransformStamped
         Odometry = nav_msgs.Odometry
+        OccupancyGrid = nav_msgs.OccupancyGrid
         TransformBroadcaster = tf2_ros.TransformBroadcaster
         StaticTransformBroadcaster = tf2_ros.StaticTransformBroadcaster
         SingleThreadedExecutor = executors.SingleThreadedExecutor
@@ -89,6 +95,7 @@ def _ensure_ros_python(setup_paths=()) -> bool:
         Twist = None
         TransformStamped = None
         Odometry = None
+        OccupancyGrid = None
         TransformBroadcaster = None
         StaticTransformBroadcaster = None
         SingleThreadedExecutor = None
@@ -341,6 +348,185 @@ class DirectCmdVelSubscriber:
         except Exception as exc:
             with self.lock:
                 self.last_error = str(exc)
+
+
+class LiveMapSubscriber:
+    """Keep the latest ROS OccupancyGrid available as a lightweight PNG preview.
+
+    This subscriber is observational only: it does not publish a ROS topic or
+    participate in the control path. The HTTP layer requests a PNG on demand,
+    so the browser can poll while mapping without a permanent video stream.
+    """
+
+    MAX_PREVIEW_PIXELS = 2_000_000
+
+    def __init__(self, topic: str, setup_paths=None):
+        self.topic = topic
+        self.setup_paths = tuple(setup_paths or ())
+        self.node = None
+        self.executor = None
+        self.subscription = None
+        self.lock = threading.RLock()
+        self.width = 0
+        self.height = 0
+        self.resolution = 0.0
+        self.origin = [0.0, 0.0, 0.0]
+        self.frame_id = ""
+        self.last_received_at: Optional[float] = None
+        self.message_count = 0
+        self.last_error: Optional[str] = None
+        self._pixels = None
+        self._spin_thread = None
+
+    @property
+    def available(self) -> bool:
+        return _ensure_ros_python(self.setup_paths)
+
+    def start(self) -> None:
+        if not self.available:
+            raise RuntimeError(f"ROS2 Python modules are not available: {_ros_import_error}")
+        with self.lock:
+            if self.subscription is not None:
+                return
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            self.node = rclpy.create_node("peacekeeper_live_map_preview")
+            self.executor = SingleThreadedExecutor()
+            self.executor.add_node(self.node)
+            self.subscription = self.node.create_subscription(
+                OccupancyGrid,
+                self.topic,
+                self._on_map,
+                10,
+            )
+            self._spin_thread = threading.Thread(target=self._spin, daemon=True)
+            self._spin_thread.start()
+
+    def shutdown(self) -> None:
+        with self.lock:
+            node = self.node
+            executor = self.executor
+            self.node = None
+            self.executor = None
+            self.subscription = None
+            self._pixels = None
+        if executor is not None:
+            try:
+                executor.shutdown()
+            except Exception:
+                pass
+        if node is not None:
+            try:
+                node.destroy_node()
+            except Exception:
+                pass
+
+    def status(self) -> dict:
+        with self.lock:
+            age_s = None
+            if self.last_received_at is not None:
+                age_s = max(0.0, time.time() - self.last_received_at)
+            return {
+                "available": self.available,
+                "ros_import_error": _ros_import_error,
+                "ready": self.subscription is not None,
+                "has_map": self._pixels is not None,
+                "topic": self.topic,
+                "message_count": self.message_count,
+                "last_received_at": self.last_received_at,
+                "age_s": age_s,
+                "width": self.width,
+                "height": self.height,
+                "resolution": self.resolution,
+                "origin": list(self.origin),
+                "frame_id": self.frame_id,
+                "last_error": self.last_error,
+                "spin_thread_alive": self._spin_thread is not None and self._spin_thread.is_alive(),
+            }
+
+    def render_png(self) -> bytes:
+        with self.lock:
+            if self._pixels is None or self.width <= 0 or self.height <= 0:
+                raise RuntimeError(f"No OccupancyGrid has been received on {self.topic} yet")
+            width = self.width
+            height = self.height
+            pixels = bytes(self._pixels)
+        if width * height > self.MAX_PREVIEW_PIXELS:
+            # Keep a potentially large SLAM map observable without turning a
+            # preview request into an expensive multi-megabyte transfer.
+            step = int(math.ceil(math.sqrt((width * height) / self.MAX_PREVIEW_PIXELS)))
+            preview_width = (width + step - 1) // step
+            preview_height = (height + step - 1) // step
+            pixels = bytes(
+                pixels[y * width + x]
+                for y in range(0, height, step)
+                for x in range(0, width, step)
+            )
+            width = preview_width
+            height = preview_height
+        return self._encode_png(width, height, pixels)
+
+    def _on_map(self, msg) -> None:
+        try:
+            width = int(msg.info.width)
+            height = int(msg.info.height)
+            values = msg.data
+            if width <= 0 or height <= 0 or len(values) != width * height:
+                raise ValueError("OccupancyGrid dimensions do not match data length")
+            # Match map_saver's PGM convention: occupied black, free white,
+            # and unknown gray. It keeps live and saved map previews comparable.
+            pixels = bytes(
+                205 if int(value) < 0 else max(0, min(254, round(254 * (100 - int(value)) / 100)))
+                for value in values
+            )
+            with self.lock:
+                self.width = width
+                self.height = height
+                self.resolution = float(msg.info.resolution)
+                self.origin = [
+                    float(msg.info.origin.position.x),
+                    float(msg.info.origin.position.y),
+                    0.0,
+                ]
+                self.frame_id = str(msg.header.frame_id)
+                self._pixels = pixels
+                self.last_received_at = time.time()
+                self.message_count += 1
+                self.last_error = None
+        except Exception as exc:
+            with self.lock:
+                self.last_error = str(exc)
+
+    def _spin(self) -> None:
+        try:
+            executor = self.executor
+            if executor is not None:
+                executor.spin()
+        except Exception as exc:
+            with self.lock:
+                self.last_error = str(exc)
+
+    @staticmethod
+    def _encode_png(width: int, height: int, pixels: bytes) -> bytes:
+        rows = b"".join(
+            b"\x00" + pixels[offset:offset + width]
+            for offset in range(0, width * height, width)
+        )
+
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(payload))
+                + kind
+                + payload
+                + struct.pack(">I", binascii.crc32(kind + payload) & 0xFFFFFFFF)
+            )
+
+        return (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 6))
+            + chunk(b"IEND", b"")
+        )
 
 
 class DirectOdomPublisher:

@@ -19,7 +19,7 @@ from .mapping import MappingService
 from .navigation import NavigationService
 from .patrol import PatrolService
 from .process_manager import ProcessManager
-from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher
+from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from .rosmaster_control import RosmasterController
 from .schemas import CmdVelRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
@@ -74,6 +74,10 @@ def create_app(config: AgentConfig) -> FastAPI:
         cmd_vel,
         setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
     )
+    live_map = LiveMapSubscriber(
+        config.ros.map_topic,
+        setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
+    )
     video = VideoService(config.video, run_dir)
     mapping = MappingService(config, process_manager)
     navigation = NavigationService(
@@ -100,6 +104,10 @@ def create_app(config: AgentConfig) -> FastAPI:
             direct_odom.start()
         except Exception as exc:
             state.set_error(f"Direct odom bridge failed: {exc}")
+        try:
+            live_map.start()
+        except Exception as exc:
+            state.set_error(f"Live map preview failed: {exc}")
         if direct_cmd_vel is not None:
             try:
                 direct_cmd_vel.start()
@@ -110,6 +118,7 @@ def create_app(config: AgentConfig) -> FastAPI:
         finally:
             patrol.shutdown()
             navigation.shutdown()
+            live_map.shutdown()
             direct_odom.shutdown()
             if direct_cmd_vel is not None:
                 direct_cmd_vel.shutdown()
@@ -142,6 +151,7 @@ def create_app(config: AgentConfig) -> FastAPI:
         process_status = process_manager.status()
         ros_status = cmd_vel.status()
         ros_status["direct_odom_bridge"] = direct_odom.status()
+        ros_status["live_map_preview"] = live_map.status()
         if direct_cmd_vel is not None:
             ros_status["direct_cmd_vel_subscriber"] = direct_cmd_vel.status()
         ros_status.update(
@@ -282,6 +292,25 @@ def create_app(config: AgentConfig) -> FastAPI:
             state.set_error(str(exc))
             return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
 
+    @app.get("/api/mapping/live-meta")
+    async def mapping_live_meta():
+        return JSONResponse({"ok": True, **await _run_blocking(live_map.status)})
+
+    @app.get("/api/mapping/live.png")
+    async def mapping_live_png():
+        try:
+            image = await _run_blocking(live_map.render_png)
+            return Response(
+                image,
+                media_type="image/png",
+                headers={"Cache-Control": "no-store, max-age=0"},
+            )
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
+
     @app.get("/api/maps/export")
     async def maps_export(name: str = Query(..., min_length=1)):
         try:
@@ -298,6 +327,10 @@ def create_app(config: AgentConfig) -> FastAPI:
             return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
         except (ValueError, OSError) as exc:
             return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+    @app.get("/api/maps/saved")
+    async def maps_saved():
+        return JSONResponse({"ok": True, "maps": await _run_blocking(mapping.saved_maps)})
 
     @app.post("/api/maps/install")
     async def maps_install(bundle: UploadFile = File(...)):
@@ -706,12 +739,28 @@ def create_app(config: AgentConfig) -> FastAPI:
 
     @app.post("/api/mapping/save")
     async def mapping_save(payload: SaveMapRequest):
-        map_active = await _run_blocking(process_manager.topic_active, config.ros.map_topic)
+        live_map_status = await _run_blocking(live_map.status)
+        # The in-process subscriber has already received a real map frame, so
+        # it is stronger evidence than a transient ROS CLI discovery result.
+        map_active = bool(live_map_status.get("has_map"))
         if not map_active:
+            map_active = await _run_blocking(
+                process_manager.wait_for_topic,
+                config.ros.map_topic,
+                10.0,
+                0.5,
+            )
+        if not map_active:
+            processes = await _run_blocking(process_manager.status)
             return JSONResponse(
                 {
                     "ok": False,
-                    "message": f"{config.ros.map_topic} is not active; start mapping and verify lidar, SLAM, and direct odom/tf are publishing first",
+                    "message": f"{config.ros.map_topic} is not active after waiting for SLAM output; verify lidar, SLAM, and direct odom/tf",
+                    "diagnostics": {
+                        "lidar": processes.get("lidar", {}),
+                        "slam": processes.get("slam", {}),
+                        "live_map_preview": live_map_status,
+                    },
                 },
                 status_code=409,
             )

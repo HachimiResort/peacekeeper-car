@@ -1,4 +1,4 @@
-import type { AlertRecord, JsonObject, MapDeployment, Mission, MissionApi, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StoredMap } from "../api/types"
+import type { AlertRecord, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StoredMap, VehicleSavedMap } from "../api/types"
 
 const now = new Date()
 const iso = (minutes = 0) => new Date(now.getTime() - minutes * 60_000).toISOString()
@@ -86,6 +86,29 @@ export class DemoMissionApi implements MissionApi {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="608" height="384"><rect width="100%" height="100%" fill="#d8d8d2"/><path d="M55 310H210V248H310V188H550M210 248V75M310 188V320M430 188V62" fill="none" stroke="#183c31" stroke-width="18"/><path d="M55 310H210V248H310V188H550M210 248V75M310 188V320M430 188V62" fill="none" stroke="#f9f8f2" stroke-width="13"/><text x="24" y="36" font-family="sans-serif" font-size="18" fill="#244c40">${label}</text></svg>`
     return new Blob([svg], { type: "image/svg+xml" })
   }
+  async vehicleMaps(_robotId: string): Promise<VehicleSavedMap[]> {
+    return maps.map((item, index) => ({
+      name: `${item.logical_name}__v${item.version}`,
+      yaml: `/root/peacekeeper-car/data/maps/${item.logical_name}__v${item.version}.yaml`,
+      pgm: `/root/peacekeeper-car/data/maps/${item.logical_name}__v${item.version}.pgm`,
+      updated_at: Date.now() / 1000 - index * 3600,
+      size_bytes: item.width * item.height,
+    }))
+  }
+  async vehicleMapPreview(_robotId: string, mapName: string) {
+    const map = maps.find((item) => `${item.logical_name}__v${item.version}` === mapName) || maps[0]
+    return this.mapPreview(map.id)
+  }
+  async liveMapStatus(robotId: string): Promise<LiveMapStatus> {
+    const mapping = robots.find((item) => item.id === robotId)?.runtime_status?.mode === "MAPPING"
+    return {
+      available: true, ready: true, has_map: Boolean(mapping), topic: "/map", message_count: mapping ? 36 : 0,
+      last_received_at: mapping ? Date.now() / 1000 : null, age_s: mapping ? 0.4 : null,
+      width: 608, height: 384, resolution: 0.05, origin: [-12.4, -8.2, 0], frame_id: "map",
+      last_error: null, spin_thread_alive: true,
+    }
+  }
+  async liveMapPreview(_robotId: string) { return this.mapPreview("map-forest-v3") }
   async mapDownload(id: string) { return new Blob([`demo bundle ${id}`], { type: "application/zip" }) }
   async uploadMap(file: File, logicalName?: string) { return { ok: true, demo: true, filename: file.name, logical_name: logicalName } }
   async importMap(payload: { robot_id: string; map_name: string; logical_name?: string }) { return { ok: true, demo: true, ...payload } }

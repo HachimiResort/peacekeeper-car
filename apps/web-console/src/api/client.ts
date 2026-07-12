@@ -1,6 +1,7 @@
 import type {
   AlertRecord,
   JsonObject,
+  LiveMapStatus,
   MapDeployment,
   Mission,
   MissionApi,
@@ -9,6 +10,7 @@ import type {
   RobotEvent,
   RuntimeStatusMessage,
   StoredMap,
+  VehicleSavedMap,
 } from "./types"
 
 export class ApiError extends Error {
@@ -77,6 +79,10 @@ export class HttpMissionApi implements MissionApi {
   async maps() { return (await this.request<{ maps: StoredMap[] }>("/api/maps")).maps }
   async map(id: string) { return this.request<StoredMap>(`/api/maps/${id}`) }
   async mapPreview(id: string) { return this.blob(`/api/maps/${id}/preview.png`) }
+  async vehicleMaps(robotId: string) { return (await this.request<{ maps: VehicleSavedMap[] }>(`/api/robots/${encodeURIComponent(robotId)}/maps/saved`)).maps }
+  async vehicleMapPreview(robotId: string, mapName: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/maps/saved/preview.png?name=${encodeURIComponent(mapName)}`) }
+  async liveMapStatus(robotId: string) { return this.request<LiveMapStatus>(`/api/robots/${encodeURIComponent(robotId)}/mapping/live-meta`) }
+  async liveMapPreview(robotId: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/mapping/live.png`) }
   async mapDownload(id: string) { return this.blob(`/api/maps/${id}/download`) }
   async uploadMap(file: File, logicalName?: string) {
     const form = new FormData()

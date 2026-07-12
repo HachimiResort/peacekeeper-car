@@ -42,3 +42,44 @@ async def test_agent_client_converts_timeout_to_domain_error():
     assert caught.value.status_code == 504
     assert caught.value.code == "agent_timeout"
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_client_reads_live_map_preview_as_bytes():
+    async def handler(request: httpx.Request):
+        assert request.url.path == "/api/mapping/live.png"
+        return httpx.Response(200, content=b"\x89PNG\r\n\x1a\npreview", headers={"content-type": "image/png"})
+
+    client = FleetAgentClient("test-token", 2, 5, 120)
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        headers={"X-Peacekeeper-Token": "test-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    robot = Robot(id="car_1", name="Car 1", base_url="http://car-1", capabilities={})
+
+    image = await client.live_map_preview(robot)
+
+    assert image.startswith(b"\x89PNG")
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_client_reads_saved_map_preview_with_name():
+    async def handler(request: httpx.Request):
+        assert request.url.path == "/api/mapping/preview.png"
+        assert request.url.params["name"] == "lab_first_map"
+        return httpx.Response(200, content=b"\x89PNG\r\n\x1a\nsaved", headers={"content-type": "image/png"})
+
+    client = FleetAgentClient("test-token", 2, 5, 120)
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        headers={"X-Peacekeeper-Token": "test-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    robot = Robot(id="car_1", name="Car 1", base_url="http://car-1", capabilities={})
+
+    image = await client.saved_map_preview(robot, "lab_first_map")
+
+    assert image.startswith(b"\x89PNG")
+    await client.close()
