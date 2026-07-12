@@ -73,7 +73,9 @@ explicit sample data, set `WEB_CONSOLE_DEMO_MODE=true` before recreating the
 web-console container.
 
 See `apps/mission-api/README.md` for registry, authentication, and map
-distribution flows, and `apps/web-console/README.md` for frontend development.
+distribution flows, `apps/web-console/README.md` for frontend development, and
+`docs/cicd.md` for the Docker Compose CI/CD pipeline and production deploy
+setup.
 
 ## Main Interfaces
 

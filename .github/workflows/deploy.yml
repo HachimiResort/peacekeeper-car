@@ -1,0 +1,78 @@
+name: Deploy Compose
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag to deploy, default is main, or fill sha-<commit>
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag || 'main' }}
+      REGISTRY: crpi-1kkkjpeehkoxqf8e.cn-shanghai.personal.cr.aliyuncs.com
+      NAMESPACE: ${{ secrets.ALIYUN_DOCKER_HUB_NAMESPACE }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Write deploy image env file
+        shell: bash
+        run: |
+          {
+            echo "MISSION_API_IMAGE=${REGISTRY}/${NAMESPACE}/peacekeeper-mission-api:${IMAGE_TAG}"
+            echo "WEB_CONSOLE_IMAGE=${REGISTRY}/${NAMESPACE}/peacekeeper-web-console:${IMAGE_TAG}"
+          } > .deploy-images.env
+
+      - name: Prepare SSH
+        shell: bash
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Upload compose bundle
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+          scp -i ~/.ssh/id_ed25519 compose.prod.yaml .deploy-images.env "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+      - name: Pull and restart remote compose services
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          ALIYUN_DOCKER_HUB_TOKEN: ${{ secrets.ALIYUN_DOCKER_HUB_TOKEN }}
+          ALIYUN_DOCKER_HUB_USER: ${{ secrets.ALIYUN_DOCKER_HUB_USER }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' ALIYUN_DOCKER_HUB_USER='$ALIYUN_DOCKER_HUB_USER' ALIYUN_DOCKER_HUB_TOKEN='$ALIYUN_DOCKER_HUB_TOKEN' bash -se" <<'EOF'
+          set -euo pipefail
+
+          cd "$DEPLOY_PATH"
+          if [ -n "${ALIYUN_DOCKER_HUB_USER:-}" ] && [ -n "${ALIYUN_DOCKER_HUB_TOKEN:-}" ]; then
+            printf '%s' "$ALIYUN_DOCKER_HUB_TOKEN" | docker login crpi-1kkkjpeehkoxqf8e.cn-shanghai.personal.cr.aliyuncs.com -u "$ALIYUN_DOCKER_HUB_USER" --password-stdin
+          fi
+          docker compose --env-file .env --env-file .deploy-images.env -f compose.prod.yaml pull
+          docker compose --env-file .env --env-file .deploy-images.env -f compose.prod.yaml up -d --remove-orphans
+          curl -fsS http://127.0.0.1:28080/health/ready > /dev/null
+          curl -fsS http://127.0.0.1:28081/ > /dev/null
+          docker compose --env-file .env --env-file .deploy-images.env -f compose.prod.yaml ps
+          EOF
