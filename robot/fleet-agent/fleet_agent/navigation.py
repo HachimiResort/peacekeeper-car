@@ -17,6 +17,7 @@ from .process_manager import ProcessManager
 
 class NavigationService:
     TERMINAL_STATES = {"succeeded", "canceled", "aborted", "rejected", "failed", "stopped"}
+    CANCEL_STALE_S = 2.0
     ACTION_STATUS = {
         0: "unknown",
         1: "accepted",
@@ -57,6 +58,7 @@ class NavigationService:
         self._active_goal_id: Optional[str] = None
         self._cancel_requested = False
         self._cancel_sent = False
+        self._cancel_requested_at: Optional[float] = None
         self._goal_results: Dict[str, dict] = {}
 
     def start(self, map_name: str) -> dict:
@@ -134,6 +136,7 @@ class NavigationService:
         return {"ok": True, "initial_pose": {"x": x, "y": y, "yaw": yaw}}
 
     def send_goal(self, x: float, y: float, yaw: float) -> dict:
+        self._clear_stale_cancel()
         self._validate_pose(x, y, yaw)
         self._require_running()
         self._ensure_ros_node()
@@ -178,6 +181,7 @@ class NavigationService:
             self.goal_handle = None
             self._cancel_requested = False
             self._cancel_sent = False
+            self._cancel_requested_at = None
         try:
             future = self.action_client.send_goal_async(
                 goal_msg,
@@ -197,6 +201,14 @@ class NavigationService:
         }
 
     def cancel_goal(self, wait_timeout_s: float = 0.0) -> dict:
+        forced = self._clear_stale_cancel()
+        if forced is not None:
+            return {
+                "ok": True,
+                "goal_id": forced.get("goal_id"),
+                "action_state": forced.get("state"),
+                "result": forced,
+            }
         with self.condition:
             goal_id = self._active_goal_id
             if goal_id is None:
@@ -208,12 +220,26 @@ class NavigationService:
                 }
             self._cancel_requested = True
             self.action_state = "canceling"
+            if self._cancel_requested_at is None:
+                self._cancel_requested_at = time.monotonic()
             goal_handle = self.goal_handle
             self.condition.notify_all()
         if goal_handle is not None:
             self._request_cancel(goal_id, goal_handle)
         if wait_timeout_s > 0:
             result = self.wait_for_goal(goal_id, timeout_s=wait_timeout_s)
+            if result.get("state") == "timeout":
+                forced = self._force_cancel_cleanup(
+                    goal_id,
+                    f"Forced local cleanup after cancel timeout ({wait_timeout_s:.1f}s)",
+                )
+                if forced is not None:
+                    return {
+                        "ok": True,
+                        "goal_id": goal_id,
+                        "action_state": forced.get("state"),
+                        "result": forced,
+                    }
             return {
                 "ok": result.get("state") in self.TERMINAL_STATES,
                 "goal_id": goal_id,
@@ -314,11 +340,40 @@ class NavigationService:
             self.spin_thread = threading.Thread(target=self.executor.spin, daemon=True)
             self.spin_thread.start()
 
+    def _clear_stale_cancel(self) -> Optional[dict]:
+        with self.condition:
+            goal_id = self._active_goal_id
+            cancel_requested_at = self._cancel_requested_at
+            state = self.action_state
+        if (
+            goal_id is None
+            or state != "canceling"
+            or cancel_requested_at is None
+            or (time.monotonic() - cancel_requested_at) < self.CANCEL_STALE_S
+        ):
+            return None
+        return self._force_cancel_cleanup(
+            goal_id,
+            f"Forced local cleanup after cancel stayed pending for more than {self.CANCEL_STALE_S:.1f}s",
+        )
+
+    def _force_cancel_cleanup(self, goal_id: str, reason: str) -> Optional[dict]:
+        with self.condition:
+            if self._active_goal_id != goal_id:
+                result = self._goal_results.get(goal_id)
+                return None if result is None else dict(result)
+            self._finish_goal_unlocked(goal_id, "canceled", reason)
+            result = dict(self._goal_results[goal_id])
+        self._reset_ros_interfaces()
+        return result
+
     def _reset_ros_interfaces(self) -> None:
         with self.condition:
             executor = self.executor
             node = self.node
             spin_thread = self.spin_thread
+            initial_pose_pub = self.initial_pose_pub
+            action_client = self.action_client
             self.executor = None
             self.node = None
             self.spin_thread = None
@@ -332,6 +387,20 @@ class NavigationService:
                 executor.shutdown()
         except Exception:
             pass
+        try:
+            if action_client is not None:
+                action_client.destroy()
+        except Exception:
+            pass
+        finally:
+            action_client = None
+        try:
+            if node is not None and initial_pose_pub is not None:
+                node.destroy_publisher(initial_pose_pub)
+        except Exception:
+            pass
+        finally:
+            initial_pose_pub = None
         try:
             if node is not None:
                 node.destroy_node()
@@ -411,6 +480,7 @@ class NavigationService:
                 if self._active_goal_id == goal_id:
                     self._cancel_sent = False
                     self.action_state = "active"
+                    self._cancel_requested_at = None
                     self.last_error = f"Failed to request goal cancellation: {exc}"
                     self.condition.notify_all()
 
@@ -429,6 +499,7 @@ class NavigationService:
             if not accepted:
                 self._cancel_requested = False
                 self._cancel_sent = False
+                self._cancel_requested_at = None
                 self.action_state = "active"
                 self.last_error = error
             self.condition.notify_all()
@@ -492,6 +563,7 @@ class NavigationService:
         self.goal_future = None
         self._cancel_requested = False
         self._cancel_sent = False
+        self._cancel_requested_at = None
         self.condition.notify_all()
 
     @staticmethod
