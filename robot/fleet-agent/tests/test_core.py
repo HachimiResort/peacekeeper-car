@@ -58,6 +58,8 @@ class FakeManagedProcessManager:
         self.config = config
         self.started = []
         self.stopped = []
+        self.dynamic_processes = {}
+        self.dynamic_starts = []
 
     def start_auto_processes(self):
         return None
@@ -65,6 +67,12 @@ class FakeManagedProcessManager:
     def start(self, key):
         self.started.append(key)
         return {"name": key, "status": "running"}
+
+    def start_dynamic(self, key, name, command):
+        self.dynamic_processes[key] = {"name": name, "command": command}
+        self.dynamic_starts.append((key, name, command))
+        self.started.append(key)
+        return {"name": name, "status": "running"}
 
     def stop(self, key, timeout_s=4.0):
         del timeout_s
@@ -76,10 +84,17 @@ class FakeManagedProcessManager:
         return self.status()
 
     def status(self):
-        return {
+        statuses = {
             key: {"name": value.name, "status": "running" if key in self.started else "stopped"}
             for key, value in self.config.processes.items()
         }
+        statuses.update(
+            {
+                key: {"name": value["name"], "status": "running" if key in self.started else "stopped"}
+                for key, value in self.dynamic_processes.items()
+            }
+        )
+        return statuses
 
     def topic_active(self, topic):
         del topic
@@ -403,6 +418,117 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(result["state"], "succeeded")
         self.assertEqual(result["status_code"], 4)
+
+    def test_navigation_start_resets_stale_ros_client_before_relaunch(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.shutdown_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        class FakeNode:
+            def __init__(self):
+                self.destroy_called = False
+
+            def destroy_node(self):
+                self.destroy_called = True
+
+        class FakeThread:
+            def __init__(self):
+                self.join_called = False
+
+            def is_alive(self):
+                return True
+
+            def join(self, timeout=None):
+                del timeout
+                self.join_called = True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            maps_dir = Path(temp_dir) / "maps"
+            maps_dir.mkdir()
+            (maps_dir / "lab.yaml").write_text("image: lab.pgm\n", encoding="utf-8")
+            config = AgentConfig(data_dir=temp_dir)
+            fake_pm = FakeManagedProcessManager(config)
+            service = NavigationService(config, fake_pm, ("", ""))
+            fake_executor = FakeExecutor()
+            fake_node = FakeNode()
+            fake_thread = FakeThread()
+            service.executor = fake_executor
+            service.node = fake_node
+            service.spin_thread = fake_thread
+            service.initial_pose_pub = object()
+            service.action_client = object()
+            service.goal_handle = object()
+            service.goal_future = object()
+            service._ros_types = {"ActionClient": object}
+
+            status = service.start("lab")
+
+            self.assertEqual(status["current_map"], "lab")
+            self.assertEqual(fake_pm.dynamic_starts[0][0], "nav2")
+            self.assertTrue(fake_executor.shutdown_called)
+            self.assertTrue(fake_node.destroy_called)
+            self.assertTrue(fake_thread.join_called)
+            self.assertIsNone(service.node)
+            self.assertIsNone(service.executor)
+            self.assertIsNone(service.spin_thread)
+            self.assertIsNone(service.action_client)
+            self.assertIsNone(service.initial_pose_pub)
+
+    def test_navigation_stop_resets_ros_client_state(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.shutdown_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        class FakeNode:
+            def __init__(self):
+                self.destroy_called = False
+
+            def destroy_node(self):
+                self.destroy_called = True
+
+        class FakeThread:
+            def __init__(self):
+                self.join_called = False
+
+            def is_alive(self):
+                return True
+
+            def join(self, timeout=None):
+                del timeout
+                self.join_called = True
+
+        config = AgentConfig()
+        service = NavigationService(config, FakeManagedProcessManager(config), ("", ""))
+        fake_executor = FakeExecutor()
+        fake_node = FakeNode()
+        fake_thread = FakeThread()
+        service.current_map_name = "lab"
+        service.executor = fake_executor
+        service.node = fake_node
+        service.spin_thread = fake_thread
+        service.initial_pose_pub = object()
+        service.action_client = object()
+        service.goal_handle = object()
+        service.goal_future = object()
+        service._ros_types = {"ActionClient": object}
+
+        result = service.stop()
+
+        self.assertEqual(result["current_map"], None)
+        self.assertTrue(fake_executor.shutdown_called)
+        self.assertTrue(fake_node.destroy_called)
+        self.assertTrue(fake_thread.join_called)
+        self.assertIsNone(service.node)
+        self.assertIsNone(service.executor)
+        self.assertIsNone(service.spin_thread)
+        self.assertIsNone(service.action_client)
+        self.assertIsNone(service.initial_pose_pub)
 
     def test_patrol_executes_points_in_order_and_converts_yaw_degrees(self):
         navigation = FakePatrolNavigation()

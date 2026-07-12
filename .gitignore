@@ -17,3 +17,5 @@ apps/mission-api/.pytest_cache/
 *.avi
 *.tsbuildinfo
 
+extra/
+docs/

@@ -69,6 +69,7 @@ class NavigationService:
                 return self.status(process_status=current_status)
             self.cancel_goal(wait_timeout_s=1.5)
             self.process_manager.stop("nav2")
+        self._reset_ros_interfaces()
         command = (
             "ros2 launch yahboomcar_nav navigation_dwa_launch.py "
             f"map:={shlex.quote(str(yaml_path))}"
@@ -95,6 +96,7 @@ class NavigationService:
             process_status = self.process_manager.stop("nav2")
         except KeyError:
             process_status = None
+        self._reset_ros_interfaces()
         with self.condition:
             if self._active_goal_id is not None:
                 self._finish_goal_unlocked(self._active_goal_id, "stopped", "Nav2 was stopped")
@@ -257,26 +259,9 @@ class NavigationService:
         except Exception:
             pass
         with self.condition:
-            executor = self.executor
-            node = self.node
-            self.executor = None
-            self.node = None
-            self.initial_pose_pub = None
-            self.action_client = None
-            self.goal_handle = None
-            self.goal_future = None
             if self._active_goal_id is not None:
                 self._finish_goal_unlocked(self._active_goal_id, "stopped", "Navigation client shut down")
-        try:
-            if executor is not None:
-                executor.shutdown()
-        except Exception:
-            pass
-        try:
-            if node is not None:
-                node.destroy_node()
-        except Exception:
-            pass
+        self._reset_ros_interfaces()
 
     def _map_yaml(self, map_name: str) -> Tuple[str, Path]:
         safe_name = MappingService._safe_name(map_name)
@@ -328,6 +313,39 @@ class NavigationService:
             }
             self.spin_thread = threading.Thread(target=self.executor.spin, daemon=True)
             self.spin_thread.start()
+
+    def _reset_ros_interfaces(self) -> None:
+        with self.condition:
+            executor = self.executor
+            node = self.node
+            spin_thread = self.spin_thread
+            self.executor = None
+            self.node = None
+            self.spin_thread = None
+            self.initial_pose_pub = None
+            self.action_client = None
+            self.goal_handle = None
+            self.goal_future = None
+            self._ros_types = None
+        try:
+            if executor is not None:
+                executor.shutdown()
+        except Exception:
+            pass
+        try:
+            if node is not None:
+                node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if (
+                spin_thread is not None
+                and spin_thread.is_alive()
+                and spin_thread is not threading.current_thread()
+            ):
+                spin_thread.join(timeout=0.5)
+        except Exception:
+            pass
 
     @staticmethod
     def _set_yaw(orientation, yaw: float) -> None:
