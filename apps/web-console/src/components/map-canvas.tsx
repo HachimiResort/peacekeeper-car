@@ -22,13 +22,23 @@ function constrainView(view: View, frame: DOMRect, stage: StageSize): View {
   return { ...view, x, y }
 }
 
-export function MapCanvas({ api, map, onPoint, points = [], interactive = true, className, fit = "contain" }: { api: MissionApi; map: StoredMap; onPoint?(point: MapPoint): void; points?: MapPoint[]; interactive?: boolean; className?: string; fit?: "contain" | "width" }) {
+export function MapCanvas({ api, map, onPoint, onPointMove, onYawChange, points = [], interactive = true, className, fit = "contain" }: { api: MissionApi; map: StoredMap; onPoint?(point: MapPoint): void; onPointMove?(index: number, point: MapPoint): void; onYawChange?(yaw: number): void; points?: MapPoint[]; interactive?: boolean; className?: string; fit?: "contain" | "width" }) {
   const [url, setUrl] = useState("")
   const [stageSize, setStageSize] = useState<StageSize | null>(null)
   const [view, setView] = useState<View>({ zoom: 1, x: 0, y: 0 })
   const [panning, setPanning] = useState(false)
+  const [focusedMarker, setFocusedMarker] = useState<number | null>(null)
+  const [directionMarker, setDirectionMarker] = useState<number | null>(null)
+  const [movingMarker, setMovingMarker] = useState<number | null>(null)
+  const [directionYaw, setDirectionYaw] = useState<number | null>(null)
+  const [markerYaws, setMarkerYaws] = useState<Record<number, number>>({})
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; startView: View; moved: boolean } | null>(null)
+  const directionDragRef = useRef<{ pointerId: number; index: number; startX: number; startY: number; moved: boolean } | null>(null)
+  const moveDragRef = useRef<{ pointerId: number; index: number } | null>(null)
+  const directionYawRef = useRef<number | null>(null)
+  const dismissCanvasPointerRef = useRef<number | null>(null)
+  const suppressMarkerClickRef = useRef<number | null>(null)
 
   useEffect(() => {
     let active = true
@@ -94,8 +104,42 @@ export function MapCanvas({ api, map, onPoint, points = [], interactive = true, 
     return () => canvas.removeEventListener("wheel", onWheel)
   }, [interactive, view.zoom, zoomAt])
 
+  useEffect(() => {
+    if (focusedMarker !== null && focusedMarker >= points.length) {
+      setFocusedMarker(null)
+      setDirectionMarker(null)
+      setMovingMarker(null)
+      setDirectionYaw(null)
+      setMarkerYaws((current) => Object.fromEntries(Object.entries(current).filter(([index]) => Number(index) < points.length)))
+    }
+  }, [focusedMarker, points.length])
+
+  useEffect(() => {
+    const dismissOutsideCanvas = (event: PointerEvent) => {
+      const canvas = canvasRef.current
+      if (focusedMarker === null || !canvas || !(event.target instanceof Node) || canvas.contains(event.target)) return
+      setFocusedMarker(null)
+      setDirectionMarker(null)
+      setMovingMarker(null)
+      setDirectionYaw(null)
+      directionYawRef.current = null
+    }
+    document.addEventListener("pointerdown", dismissOutsideCanvas, true)
+    return () => document.removeEventListener("pointerdown", dismissOutsideCanvas, true)
+  }, [focusedMarker])
+
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!interactive || event.button !== 0) return
+    if (focusedMarker !== null) {
+      event.currentTarget.setPointerCapture(event.pointerId)
+      dismissCanvasPointerRef.current = event.pointerId
+      setFocusedMarker(null)
+      setDirectionMarker(null)
+      setMovingMarker(null)
+      setDirectionYaw(null)
+      directionYawRef.current = null
+      return
+    }
     event.currentTarget.setPointerCapture(event.pointerId)
     dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startView: view, moved: false }
     setPanning(true)
@@ -112,6 +156,11 @@ export function MapCanvas({ api, map, onPoint, points = [], interactive = true, 
   }
 
   const finishPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dismissCanvasPointerRef.current === event.pointerId) {
+      dismissCanvasPointerRef.current = null
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+      return
+    }
     const drag = dragRef.current
     if (!drag || drag.pointerId !== event.pointerId) return
     dragRef.current = null
@@ -125,6 +174,134 @@ export function MapCanvas({ api, map, onPoint, points = [], interactive = true, 
     onPoint(pixelToMap(map, pixelX, pixelY))
   }
 
+  const focusMarker = (index: number) => {
+    if (!interactive || (!onYawChange && !onPointMove)) return
+    setFocusedMarker(index)
+    setDirectionMarker(null)
+    setMovingMarker(null)
+    setDirectionYaw(null)
+  }
+
+  const onMarkerClick = (index: number) => {
+    if (suppressMarkerClickRef.current === index) {
+      suppressMarkerClickRef.current = null
+      return
+    }
+    focusMarker(index)
+  }
+
+  const startDirection = (index: number) => {
+    if (!onYawChange) return
+    setFocusedMarker(index)
+    setDirectionMarker(index)
+    setMovingMarker(null)
+    setDirectionYaw(markerYaws[index] ?? null)
+    directionYawRef.current = markerYaws[index] ?? null
+  }
+
+  const startDirectionDrag = (event: React.PointerEvent<HTMLButtonElement>, index: number) => {
+    if (directionMarker !== index || event.button !== 0) return
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    directionDragRef.current = { pointerId: event.pointerId, index, startX: event.clientX, startY: event.clientY, moved: false }
+  }
+
+  const updateDirection = (event: React.PointerEvent<HTMLButtonElement>, index: number) => {
+    const drag = directionDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId || drag.index !== index) return
+    const dxFromStart = event.clientX - drag.startX
+    const dyFromStart = event.clientY - drag.startY
+    if (Math.abs(dxFromStart) + Math.abs(dyFromStart) > 3) drag.moved = true
+    const rect = event.currentTarget.getBoundingClientRect()
+    const dx = event.clientX - (rect.left + rect.width / 2)
+    const dy = event.clientY - (rect.top + rect.height / 2)
+    if (dx === 0 && dy === 0) return
+    const yaw = (Math.atan2(-dy, dx) * 180 / Math.PI + 360) % 360
+    directionYawRef.current = yaw
+    setDirectionYaw(yaw)
+  }
+
+  const finishDirection = (event: React.PointerEvent<HTMLButtonElement>, index: number) => {
+    const drag = directionDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId || drag.index !== index) return
+    directionDragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    const nextYaw = directionYawRef.current
+    if (drag.moved && nextYaw !== null) {
+      const committedYaw = Math.round(nextYaw) % 360
+      suppressMarkerClickRef.current = index
+      window.requestAnimationFrame(() => {
+        if (suppressMarkerClickRef.current === index) suppressMarkerClickRef.current = null
+      })
+      setMarkerYaws((current) => ({ ...current, [index]: committedYaw }))
+      onYawChange?.(committedYaw)
+      setFocusedMarker(null)
+      setDirectionMarker(null)
+    }
+    setDirectionYaw(null)
+    directionYawRef.current = null
+  }
+
+  const cancelDirection = (event: React.PointerEvent<HTMLButtonElement>, index: number) => {
+    const drag = directionDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId || drag.index !== index) return
+    directionDragRef.current = null
+    setDirectionYaw(null)
+    directionYawRef.current = null
+  }
+
+  const startMove = (index: number) => {
+    if (!onPointMove) return
+    setFocusedMarker(index)
+    setDirectionMarker(null)
+    setMovingMarker(index)
+    setDirectionYaw(null)
+    directionYawRef.current = null
+  }
+
+  const pointAt = (clientX: number, clientY: number) => {
+    const frame = canvasRef.current?.getBoundingClientRect()
+    if (!frame || !stageSize) return null
+    const pixelX = Math.min(map.width, Math.max(0, (clientX - frame.left - view.x) / view.zoom / stageSize.width * map.width))
+    const pixelY = Math.min(map.height, Math.max(0, (clientY - frame.top - view.y) / view.zoom / stageSize.height * map.height))
+    return pixelToMap(map, pixelX, pixelY)
+  }
+
+  const startPointMove = (event: React.PointerEvent<HTMLButtonElement>, index: number) => {
+    if (movingMarker !== index || event.button !== 0) return
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    moveDragRef.current = { pointerId: event.pointerId, index }
+  }
+
+  const updatePointMove = (event: React.PointerEvent<HTMLButtonElement>, index: number) => {
+    const drag = moveDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId || drag.index !== index) return
+    const point = pointAt(event.clientX, event.clientY)
+    if (point) onPointMove?.(index, point)
+  }
+
+  const finishPointMove = (event: React.PointerEvent<HTMLButtonElement>, index: number) => {
+    const drag = moveDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId || drag.index !== index) return
+    moveDragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    suppressMarkerClickRef.current = index
+    window.requestAnimationFrame(() => {
+      if (suppressMarkerClickRef.current === index) suppressMarkerClickRef.current = null
+    })
+    setFocusedMarker(null)
+    setMovingMarker(null)
+  }
+
+  const cancelPointMove = (event: React.PointerEvent<HTMLButtonElement>, index: number) => {
+    const drag = moveDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId || drag.index !== index) return
+    moveDragRef.current = null
+    setFocusedMarker(null)
+    setMovingMarker(null)
+  }
+
   const stageStyle = stageSize ? {
     width: `${stageSize.width}px`,
     height: `${stageSize.height}px`,
@@ -134,14 +311,19 @@ export function MapCanvas({ api, map, onPoint, points = [], interactive = true, 
   return <div ref={canvasRef} className={cn("map-canvas", interactive && "interactive", panning && "is-panning", fit === "width" && "fit-width", className)} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishPointer} onPointerCancel={finishPointer}>
     <div className="map-stage" style={stageStyle}>
       {url ? <img src={url} alt={`${map.logical_name} v${map.version}`} draggable={false} onDragStart={(event) => event.preventDefault()} /> : <div className="map-loading">正在读取地图</div>}
-      {points.map((point, index) => <MapMarker key={`${point.x}-${point.y}-${index}`} map={map} point={point} index={index} zoom={view.zoom} />)}
+      {points.map((point, index) => <MapMarker key={index} map={map} point={point} index={index} zoom={view.zoom} interactive={Boolean(interactive && (onYawChange || onPointMove))} focused={focusedMarker === index} choosingDirection={directionMarker === index} moving={movingMarker === index} directionYaw={directionMarker === index ? directionYaw : markerYaws[index] ?? null} canChooseDirection={Boolean(onYawChange)} canMove={Boolean(onPointMove)} onMarkerClick={onMarkerClick} onChooseDirection={startDirection} onChooseMove={startMove} onDirectionStart={startDirectionDrag} onDirectionMove={updateDirection} onDirectionEnd={finishDirection} onDirectionCancel={cancelDirection} onMoveStart={startPointMove} onMoveMove={updatePointMove} onMoveEnd={finishPointMove} onMoveCancel={cancelPointMove} />)}
     </div>
-    {interactive && <><div className="map-hint"><Crosshair size={14} />滚轮缩放 · 拖拽移动 · 单击选点</div><div className="map-zoom-controls" onPointerDown={(event) => event.stopPropagation()}><button type="button" aria-label="放大地图" onClick={() => zoomAt(view.zoom * 1.25)}><Plus size={16} /></button><button type="button" aria-label="缩小地图" onClick={() => zoomAt(view.zoom / 1.25)}><Minus size={16} /></button><button type="button" aria-label="重置地图视图" onClick={resetView}><RotateCcw size={15} /></button><span><Maximize2 size={13} />{Math.round(view.zoom * 100)}%</span></div></>}
+    {interactive && <><div className="map-hint"><Crosshair size={14} />滚轮缩放 · 拖拽移动 · 单击选点或标点</div><div className="map-zoom-controls" onPointerDown={(event) => event.stopPropagation()}><button type="button" aria-label="放大地图" onClick={() => zoomAt(view.zoom * 1.25)}><Plus size={16} /></button><button type="button" aria-label="缩小地图" onClick={() => zoomAt(view.zoom / 1.25)}><Minus size={16} /></button><button type="button" aria-label="重置地图视图" onClick={resetView}><RotateCcw size={15} /></button><span><Maximize2 size={13} />{Math.round(view.zoom * 100)}%</span></div></>}
   </div>
 }
 
-function MapMarker({ map, point, index, zoom }: { map: StoredMap; point: MapPoint; index: number; zoom: number }) {
+function MapMarker({ map, point, index, zoom, interactive, focused, choosingDirection, moving, directionYaw, canChooseDirection, canMove, onMarkerClick, onChooseDirection, onChooseMove, onDirectionStart, onDirectionMove, onDirectionEnd, onDirectionCancel, onMoveStart, onMoveMove, onMoveEnd, onMoveCancel }: { map: StoredMap; point: MapPoint; index: number; zoom: number; interactive: boolean; focused: boolean; choosingDirection: boolean; moving: boolean; directionYaw: number | null; canChooseDirection: boolean; canMove: boolean; onMarkerClick(index: number): void; onChooseDirection(index: number): void; onChooseMove(index: number): void; onDirectionStart(event: React.PointerEvent<HTMLButtonElement>, index: number): void; onDirectionMove(event: React.PointerEvent<HTMLButtonElement>, index: number): void; onDirectionEnd(event: React.PointerEvent<HTMLButtonElement>, index: number): void; onDirectionCancel(event: React.PointerEvent<HTMLButtonElement>, index: number): void; onMoveStart(event: React.PointerEvent<HTMLButtonElement>, index: number): void; onMoveMove(event: React.PointerEvent<HTMLButtonElement>, index: number): void; onMoveEnd(event: React.PointerEvent<HTMLButtonElement>, index: number): void; onMoveCancel(event: React.PointerEvent<HTMLButtonElement>, index: number): void }) {
   const left = (point.pixelX / map.width) * 100
   const top = (point.pixelY / map.height) * 100
-  return <span className="map-marker" style={{ left: `${left}%`, top: `${top}%`, transform: `translate(-50%, -50%) scale(${1 / zoom})` }}>{index + 1}</span>
+  const arrowAngle = directionYaw === null ? 0 : ((180 - directionYaw) % 360 + 360) % 360 - 180
+  return <span className={cn("map-marker", !interactive && "is-static", focused && "is-focused", choosingDirection && "is-direction-mode", moving && "is-moving", left > 72 && "is-right-edge")} style={{ left: `${left}%`, top: `${top}%`, transform: `translate(-50%, -50%) scale(${1 / zoom})` }}>
+    <button type="button" className="map-marker-hit" aria-label={`点位 ${index + 1}${choosingDirection ? "，正在选择方向" : moving ? "，正在移动位置" : ""}`} disabled={!interactive} onPointerDown={(event) => { event.stopPropagation(); if (moving) onMoveStart(event, index); else onDirectionStart(event, index) }} onPointerMove={(event) => { if (moving) onMoveMove(event, index); else onDirectionMove(event, index) }} onPointerUp={(event) => { if (moving) onMoveEnd(event, index); else onDirectionEnd(event, index) }} onPointerCancel={(event) => { if (moving) onMoveCancel(event, index); else onDirectionCancel(event, index) }} onClick={(event) => { event.stopPropagation(); if (!choosingDirection && !moving) onMarkerClick(index) }}>{index + 1}</button>
+    {directionYaw !== null && <span className="map-marker-arrow" style={{ transform: `translateY(-50%) rotate(${arrowAngle}deg)` }} />}
+    {focused && !choosingDirection && !moving && <span className="map-marker-menu" onPointerDown={(event) => event.stopPropagation()}><button type="button" disabled={!canChooseDirection} onClick={(event) => { event.stopPropagation(); onChooseDirection(index) }}>选择方向</button><button type="button" disabled={!canMove} onClick={(event) => { event.stopPropagation(); onChooseMove(index) }}>移动位置</button></span>}
+  </span>
 }
