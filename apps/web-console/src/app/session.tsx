@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import type { MissionApi } from "../api/types"
 import { HttpMissionApi } from "../api/client"
 import { DemoMissionApi } from "../mocks/demo-client"
@@ -28,7 +28,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || "")
   const [operatorName, setOperatorName] = useState(() => localStorage.getItem(OPERATOR_KEY) || "值守员")
   const [connected, setConnected] = useState(() => demoMode || Boolean(token))
-  const api = connected ? (demoMode ? new DemoMissionApi() : new HttpMissionApi(token)) : null
+  const api = useMemo(() => connected ? (demoMode ? new DemoMissionApi() : new HttpMissionApi(token)) : null, [connected, demoMode, token])
 
   useEffect(() => {
     const unauthorized = () => {
