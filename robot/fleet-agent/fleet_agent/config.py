@@ -50,6 +50,14 @@ class VideoConfig:
 
 
 @dataclass
+class DepthConfig:
+    topic: str = "/camera/depth/image_raw"
+    window_radius_px: int = 6
+    min_distance_m: float = 0.1
+    max_distance_m: float = 8.0
+
+
+@dataclass
 class ControlConfig:
     backend: str = "rosmaster"
     rosmaster_port: str = "/dev/myserial"
@@ -98,6 +106,7 @@ class AgentConfig:
     ros: RosConfig = field(default_factory=RosConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
+    depth: DepthConfig = field(default_factory=DepthConfig)
     control: ControlConfig = field(default_factory=ControlConfig)
     processes: Dict[str, ProcessConfig] = field(
         default_factory=lambda: {
@@ -108,6 +117,10 @@ class AgentConfig:
                     "ros2 run tf2_ros static_transform_publisher "
                     "-0.0455 5.258E-05 0.3059 3.14 0 0 base_link laser & wait'"
                 ),
+            ),
+            "depth_camera": ProcessConfig(
+                name="depth_camera",
+                command="ros2 launch astra_camera astra.launch.xml",
             ),
             "slam": ProcessConfig(
                 name="slam",
@@ -139,6 +152,7 @@ def _to_dict(config: AgentConfig) -> dict:
         "ros": vars(config.ros),
         "safety": vars(config.safety),
         "video": vars(config.video),
+        "depth": vars(config.depth),
         "control": vars(config.control),
         "processes": {key: vars(value) for key, value in config.processes.items()},
         "mapping": vars(config.mapping),
@@ -164,6 +178,7 @@ def _from_dict(raw: dict) -> AgentConfig:
         ros=RosConfig(**raw.get("ros", {})),
         safety=SafetyConfig(**raw.get("safety", {})),
         video=VideoConfig(**raw.get("video", {})),
+        depth=DepthConfig(**raw.get("depth", {})),
         control=ControlConfig(**raw.get("control", {})),
         processes=processes or AgentConfig().processes,
         mapping=MappingConfig(**raw.get("mapping", {})),

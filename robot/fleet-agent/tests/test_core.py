@@ -32,7 +32,7 @@ from fleet_agent import map_bundle as map_bundle_module
 from fleet_agent.navigation import NavigationService
 from fleet_agent.patrol import PatrolService
 from fleet_agent.rosmaster_control import RosmasterController
-from fleet_agent.ros_control import CmdVelPublisher, DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
+from fleet_agent.ros_control import CmdVelPublisher, DepthFrameSubscriber, DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from fleet_agent.state import Mode, RuntimeState
 from fleet_agent.video import VideoService
 
@@ -277,6 +277,44 @@ class CoreTests(unittest.TestCase):
             path = Path(result["path"])
             self.assertTrue(path.exists())
             self.assertEqual(path.read_bytes()[:2], b"\xff\xd8")
+
+    def test_depth_measure_reads_16uc1_and_returns_median_distance(self):
+        subscriber = DepthFrameSubscriber(AgentConfig().depth)
+        subscriber.width = 3
+        subscriber.height = 3
+        subscriber.step = 6
+        subscriber.encoding = "16UC1"
+        subscriber.is_bigendian = False
+        subscriber.data = b"".join(
+            int(value).to_bytes(2, "little", signed=False)
+            for value in [
+                0, 900, 0,
+                1000, 1100, 1200,
+                0, 1300, 0,
+            ]
+        )
+        subscriber.last_received_at = time.time()
+
+        result = subscriber.measure(0.5, 0.5, window_radius_px=1)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["pixel_x"], 1)
+        self.assertEqual(result["pixel_y"], 1)
+        self.assertEqual(result["sample_count"], 5)
+        self.assertAlmostEqual(result["distance_m"], 1.1, places=3)
+
+    def test_depth_measure_rejects_when_no_valid_sample_exists(self):
+        subscriber = DepthFrameSubscriber(AgentConfig().depth)
+        subscriber.width = 2
+        subscriber.height = 2
+        subscriber.step = 4
+        subscriber.encoding = "16UC1"
+        subscriber.is_bigendian = False
+        subscriber.data = b"\x00\x00" * 4
+        subscriber.last_received_at = time.time()
+
+        with self.assertRaises(RuntimeError):
+            subscriber.measure(0.5, 0.5, window_radius_px=1)
 
     def test_mapping_save_sanitizes_name_and_checks_outputs(self):
         with tempfile.TemporaryDirectory() as temp_dir:

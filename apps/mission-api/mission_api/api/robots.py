@@ -1,9 +1,11 @@
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from ..dependencies import get_robot_or_404, get_session
 from ..errors import ApiError
@@ -13,6 +15,12 @@ from ..schemas import ManualCommand, MapNameRequest, MapSaveRequest, PatrolReque
 from ..views import robot_view
 
 router = APIRouter(prefix="/api/robots", tags=["robots"])
+
+
+class DepthMeasurePayload(BaseModel):
+    x_ratio: float = Field(ge=0.0, le=1.0)
+    y_ratio: float = Field(ge=0.0, le=1.0)
+    window_radius_px: Optional[int] = Field(default=None, ge=0, le=40)
 
 
 @router.get("", response_model=RobotListResponse)
@@ -139,6 +147,16 @@ async def mapping_stop(robot_id: str, request: Request, session: AsyncSession = 
     return await _proxy(request, session, robot_id, "/api/mapping/stop")
 
 
+@router.post("/{robot_id}/depth/start")
+async def depth_start(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, "/api/process/start", {"process": "depth_camera"})
+
+
+@router.post("/{robot_id}/depth/stop")
+async def depth_stop(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, "/api/process/stop", {"process": "depth_camera"})
+
+
 @router.get("/{robot_id}/mapping/live-meta")
 async def mapping_live_meta(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
     robot = await get_robot_or_404(session, robot_id)
@@ -171,6 +189,37 @@ async def video_sample(robot_id: str, request: Request, session: AsyncSession = 
         media_type="image/jpeg",
         headers={"Cache-Control": "no-store, max-age=0"},
     )
+
+
+@router.get("/{robot_id}/video/stream.mjpg")
+async def video_stream(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    response = await request.app.state.agent_client.video_stream_response(robot)
+    media_type = response.headers.get("content-type", "multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(
+        response.aiter_bytes(),
+        media_type=media_type,
+        headers={"Cache-Control": "no-store, max-age=0"},
+        background=BackgroundTask(response.aclose),
+    )
+
+
+@router.get("/{robot_id}/depth/status")
+async def depth_status(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    return await request.app.state.agent_client.depth_status(robot)
+
+
+@router.post("/{robot_id}/depth/measure")
+async def depth_measure(robot_id: str, payload: DepthMeasurePayload, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    return await request.app.state.agent_client.depth_measure(robot, payload.model_dump(exclude_none=True))
 
 
 @router.get("/{robot_id}/maps/saved")

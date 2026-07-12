@@ -1,5 +1,7 @@
 import type {
   AlertRecord,
+  DepthMeasurement,
+  DepthStatus,
   JsonObject,
   LiveMapStatus,
   MapDeployment,
@@ -91,6 +93,11 @@ export class HttpMissionApi implements MissionApi {
   async liveMapStatus(robotId: string) { return this.request<LiveMapStatus>(`/api/robots/${encodeURIComponent(robotId)}/mapping/live-meta`) }
   async liveMapPreview(robotId: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/mapping/live.png`) }
   async videoSample(robotId: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/video/sample.jpg`) }
+  videoStreamUrl(robotId: string) { return `/api/robots/${encodeURIComponent(robotId)}/video/stream.mjpg?token=${encodeURIComponent(this.token)}` }
+  async depthStatus(robotId: string) { return this.request<DepthStatus>(`/api/robots/${encodeURIComponent(robotId)}/depth/status`) }
+  async depthMeasure(robotId: string, payload: { x_ratio: number; y_ratio: number; window_radius_px?: number }) {
+    return this.request<DepthMeasurement>(`/api/robots/${encodeURIComponent(robotId)}/depth/measure`, { method: "POST", body: JSON.stringify(payload) })
+  }
   async mapDownload(id: string) { return this.blob(`/api/maps/${id}/download`) }
   async uploadMap(file: File, logicalName?: string) {
     const form = new FormData()

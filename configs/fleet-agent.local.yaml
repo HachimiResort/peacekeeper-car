@@ -42,9 +42,19 @@ video:
   height: 480
   fps: 10
 
+depth:
+  topic: /camera/depth/image_raw
+  window_radius_px: 4
+  min_distance_m: 0.1
+  max_distance_m: 8.0
+
 processes:
   lidar:
     name: lidar
+    command: python3 -c "import time; time.sleep(3600)"
+    auto_start: false
+  depth_camera:
+    name: depth_camera
     command: python3 -c "import time; time.sleep(3600)"
     auto_start: false
   laser_tracker:

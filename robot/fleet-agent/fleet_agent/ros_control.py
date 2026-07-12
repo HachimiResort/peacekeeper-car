@@ -14,13 +14,14 @@ import zlib
 from importlib import import_module
 from typing import Optional
 
-from .config import SafetyConfig
+from .config import DepthConfig, SafetyConfig
 
 rclpy = None
 Twist = None
 TransformStamped = None
 Odometry = None
 OccupancyGrid = None
+SensorImage = None
 TransformBroadcaster = None
 StaticTransformBroadcaster = None
 SingleThreadedExecutor = None
@@ -61,13 +62,14 @@ def _source_ros_environment(setup_paths) -> None:
 
 def _ensure_ros_python(setup_paths=()) -> bool:
     """Import rclpy and geometry_msgs after optional ROS environment setup."""
-    global rclpy, Twist, TransformStamped, Odometry, OccupancyGrid, TransformBroadcaster, StaticTransformBroadcaster, SingleThreadedExecutor, _ros_import_error
+    global rclpy, Twist, TransformStamped, Odometry, OccupancyGrid, SensorImage, TransformBroadcaster, StaticTransformBroadcaster, SingleThreadedExecutor, _ros_import_error
     if (
         rclpy is not None
         and Twist is not None
         and TransformStamped is not None
         and Odometry is not None
         and OccupancyGrid is not None
+        and SensorImage is not None
         and TransformBroadcaster is not None
         and StaticTransformBroadcaster is not None
         and SingleThreadedExecutor is not None
@@ -78,12 +80,14 @@ def _ensure_ros_python(setup_paths=()) -> bool:
         rclpy = import_module("rclpy")
         geometry_msgs = import_module("geometry_msgs.msg")
         nav_msgs = import_module("nav_msgs.msg")
+        sensor_msgs = import_module("sensor_msgs.msg")
         tf2_ros = import_module("tf2_ros")
         executors = import_module("rclpy.executors")
         Twist = geometry_msgs.Twist
         TransformStamped = geometry_msgs.TransformStamped
         Odometry = nav_msgs.Odometry
         OccupancyGrid = nav_msgs.OccupancyGrid
+        SensorImage = sensor_msgs.Image
         TransformBroadcaster = tf2_ros.TransformBroadcaster
         StaticTransformBroadcaster = tf2_ros.StaticTransformBroadcaster
         SingleThreadedExecutor = executors.SingleThreadedExecutor
@@ -96,6 +100,7 @@ def _ensure_ros_python(setup_paths=()) -> bool:
         TransformStamped = None
         Odometry = None
         OccupancyGrid = None
+        SensorImage = None
         TransformBroadcaster = None
         StaticTransformBroadcaster = None
         SingleThreadedExecutor = None
@@ -527,6 +532,203 @@ class LiveMapSubscriber:
             + chunk(b"IDAT", zlib.compress(rows, 6))
             + chunk(b"IEND", b"")
         )
+
+
+class DepthFrameSubscriber:
+    """Subscribe to a ROS depth image and expose click-to-measure sampling."""
+
+    SUPPORTED_ENCODINGS = {"16UC1", "mono16", "32FC1"}
+
+    def __init__(self, config: DepthConfig, setup_paths=None):
+        self.config = config
+        self.setup_paths = tuple(setup_paths or ())
+        self.node = None
+        self.executor = None
+        self.subscription = None
+        self.lock = threading.RLock()
+        self.width = 0
+        self.height = 0
+        self.step = 0
+        self.encoding = ""
+        self.is_bigendian = False
+        self.data = b""
+        self.last_received_at: Optional[float] = None
+        self.message_count = 0
+        self.last_error: Optional[str] = None
+        self._spin_thread = None
+
+    @property
+    def available(self) -> bool:
+        return _ensure_ros_python(self.setup_paths)
+
+    def start(self) -> None:
+        if not self.available:
+            raise RuntimeError(f"ROS2 Python modules are not available: {_ros_import_error}")
+        with self.lock:
+            if self.subscription is not None:
+                return
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            self.node = rclpy.create_node("peacekeeper_depth_measure")
+            self.executor = SingleThreadedExecutor()
+            self.executor.add_node(self.node)
+            self.subscription = self.node.create_subscription(
+                SensorImage,
+                self.config.topic,
+                self._on_depth,
+                10,
+            )
+            self._spin_thread = threading.Thread(target=self._spin, daemon=True)
+            self._spin_thread.start()
+
+    def shutdown(self) -> None:
+        with self.lock:
+            node = self.node
+            executor = self.executor
+            self.node = None
+            self.executor = None
+            self.subscription = None
+            self.data = b""
+        if executor is not None:
+            try:
+                executor.shutdown()
+            except Exception:
+                pass
+        if node is not None:
+            try:
+                node.destroy_node()
+            except Exception:
+                pass
+
+    def status(self) -> dict:
+        with self.lock:
+            age_s = None
+            if self.last_received_at is not None:
+                age_s = max(0.0, time.time() - self.last_received_at)
+            return {
+                "available": self.available,
+                "ros_import_error": _ros_import_error,
+                "ready": self.subscription is not None,
+                "has_depth": bool(self.data),
+                "topic": self.config.topic,
+                "message_count": self.message_count,
+                "last_received_at": self.last_received_at,
+                "age_s": age_s,
+                "width": self.width,
+                "height": self.height,
+                "encoding": self.encoding,
+                "step": self.step,
+                "last_error": self.last_error,
+                "spin_thread_alive": self._spin_thread is not None and self._spin_thread.is_alive(),
+            }
+
+    def measure(self, x_ratio: float, y_ratio: float, window_radius_px: Optional[int] = None) -> dict:
+        with self.lock:
+            width = self.width
+            height = self.height
+            step = self.step
+            encoding = self.encoding
+            is_bigendian = self.is_bigendian
+            payload = bytes(self.data)
+            last_received_at = self.last_received_at
+        if not payload or width <= 0 or height <= 0:
+            raise RuntimeError(f"No depth frame has been received on {self.config.topic} yet")
+        if encoding not in self.SUPPORTED_ENCODINGS:
+            raise RuntimeError(f"Unsupported depth encoding: {encoding}")
+
+        x_ratio = max(0.0, min(1.0, float(x_ratio)))
+        y_ratio = max(0.0, min(1.0, float(y_ratio)))
+        center_x = min(width - 1, max(0, round(x_ratio * (width - 1))))
+        center_y = min(height - 1, max(0, round(y_ratio * (height - 1))))
+        radius = max(0, int(window_radius_px if window_radius_px is not None else self.config.window_radius_px))
+
+        samples: list[float] = []
+        for py in range(max(0, center_y - radius), min(height, center_y + radius + 1)):
+            for px in range(max(0, center_x - radius), min(width, center_x + radius + 1)):
+                distance_m = self._decode_depth_value(payload, step, px, py, encoding, is_bigendian)
+                if distance_m is None:
+                    continue
+                if distance_m < self.config.min_distance_m or distance_m > self.config.max_distance_m:
+                    continue
+                samples.append(distance_m)
+
+        if not samples:
+            raise RuntimeError("Depth frame is available, but no valid distance was found near the selected point")
+
+        samples.sort()
+        median = samples[len(samples) // 2]
+        return {
+            "ok": True,
+            "distance_m": round(median, 3),
+            "distance_mm": int(round(median * 1000)),
+            "x_ratio": x_ratio,
+            "y_ratio": y_ratio,
+            "pixel_x": center_x,
+            "pixel_y": center_y,
+            "window_radius_px": radius,
+            "sample_count": len(samples),
+            "width": width,
+            "height": height,
+            "encoding": encoding,
+            "last_received_at": last_received_at,
+        }
+
+    def _on_depth(self, msg) -> None:
+        try:
+            width = int(msg.width)
+            height = int(msg.height)
+            step = int(msg.step)
+            encoding = str(msg.encoding)
+            if width <= 0 or height <= 0 or step <= 0:
+                raise ValueError("Depth image dimensions are invalid")
+            if encoding not in self.SUPPORTED_ENCODINGS:
+                raise ValueError(f"Unsupported depth encoding: {encoding}")
+            payload = bytes(msg.data)
+            min_expected = step * height
+            if len(payload) < min_expected:
+                raise ValueError("Depth image payload is shorter than expected")
+            with self.lock:
+                self.width = width
+                self.height = height
+                self.step = step
+                self.encoding = encoding
+                self.is_bigendian = bool(msg.is_bigendian)
+                self.data = payload
+                self.last_received_at = time.time()
+                self.message_count += 1
+                self.last_error = None
+        except Exception as exc:
+            with self.lock:
+                self.last_error = str(exc)
+
+    def _spin(self) -> None:
+        try:
+            executor = self.executor
+            if executor is not None:
+                executor.spin()
+        except Exception as exc:
+            with self.lock:
+                self.last_error = str(exc)
+
+    @staticmethod
+    def _decode_depth_value(payload: bytes, step: int, px: int, py: int, encoding: str, is_bigendian: bool) -> Optional[float]:
+        if encoding in {"16UC1", "mono16"}:
+            offset = py * step + px * 2
+            if offset + 2 > len(payload):
+                return None
+            raw = int.from_bytes(payload[offset:offset + 2], byteorder="big" if is_bigendian else "little", signed=False)
+            if raw <= 0:
+                return None
+            return raw / 1000.0
+        if encoding == "32FC1":
+            offset = py * step + px * 4
+            if offset + 4 > len(payload):
+                return None
+            value = struct.unpack(">f" if is_bigendian else "<f", payload[offset:offset + 4])[0]
+            if not math.isfinite(value) or value <= 0:
+                return None
+            return float(value)
+        return None
 
 
 class DirectOdomPublisher:

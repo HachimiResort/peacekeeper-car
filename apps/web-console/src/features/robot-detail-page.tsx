@@ -14,7 +14,7 @@ import { MapCanvas } from "../components/map-canvas"
 import { Badge, Button, Card, EmptyState, InlineActionStatus, JsonPanel, LoadingBlock, PageHeader, StatusDot, fieldClass } from "../components/ui"
 
 type Direction = "forward" | "backward" | "left" | "right"
-type PanelName = "control" | "mapping" | "navigation" | "patrol"
+type PanelName = "control" | "mapping" | "camera" | "navigation" | "patrol"
 type PanelState = { tone: "info" | "success" | "error" | "warning"; title: string; detail?: string }
 
 const motion: Record<Direction, { linear_x: number; angular_z: number }> = {
@@ -30,6 +30,8 @@ const labels: Record<string, { pending: string; success: string; panel: PanelNam
   "mapping/start": { pending: "正在启动", success: "建图指令已下发", panel: "mapping" },
   "mapping/stop": { pending: "正在停止", success: "停止 SLAM 指令已下发", panel: "mapping" },
   "mapping/save": { pending: "正在保存", success: "地图已保存并导入中心", panel: "mapping" },
+  "depth/start": { pending: "正在启动", success: "深度相机启动指令已下发", panel: "camera" },
+  "depth/stop": { pending: "正在停止", success: "深度相机停止指令已下发", panel: "camera" },
   "navigation/start": { pending: "正在启动", success: "Nav2 启动指令已下发", panel: "navigation" },
   "navigation/initial-pose": { pending: "正在设置", success: "初始位姿已下发", panel: "navigation" },
   "navigation/goal": { pending: "正在下发", success: "导航目标已下发", panel: "navigation" },
@@ -152,7 +154,7 @@ export function RobotDetailPage() {
 
   const live = statuses[robot.id]
   const currentRobot = live ? { ...robot, online: Boolean(live.online), runtime_status: (live.status as Record<string, unknown>) || robot.runtime_status, last_seen: String(live.last_seen || robot.last_seen || "") || null } : robot
-  const runtime = currentRobot.runtime_status as { mode?: string; processes?: Record<string, string>; navigation?: Record<string, unknown>; patrol?: Record<string, unknown>; video?: { streaming?: boolean; device?: string }; last_error?: string } | null
+  const runtime = currentRobot.runtime_status as { mode?: string; processes?: Record<string, string>; navigation?: Record<string, unknown>; patrol?: Record<string, unknown>; video?: { streaming?: boolean; device?: string }; depth?: { has_depth?: boolean; encoding?: string; topic?: string; last_error?: string | null }; last_error?: string } | null
   const navigation = runtime?.navigation || {}
   const patrol = runtime?.patrol || {}
   const mode = runtime?.mode || "UNKNOWN"
@@ -223,11 +225,16 @@ export function RobotDetailPage() {
 
       <Card className="panel span-2 camera-panel">
         <div className="panel-head">
-          <div><h2>车载摄像头</h2><p>打开后按固定频率抓取单帧，适合通过中心端远程查看</p></div>
-          <Button variant={cameraActive ? "secondary" : "primary"} disabled={!cameraAvailable} onClick={() => setCameraActive((current) => !current)}>{cameraActive ? "关闭摄像头" : "打开摄像头"}</Button>
+          <div><h2>车载摄像头</h2><p>打开后直接切到连续视频流，并支持点击画面测试目标距离</p></div>
+          <div className="stack-actions">
+            <Button variant={cameraActive ? "secondary" : "primary"} disabled={!cameraAvailable} onClick={() => setCameraActive((current) => !current)}>{cameraActive ? "关闭摄像头" : "打开摄像头"}</Button>
+            <Button loading={actions.isPending("depth/start")} loadingText="正在启动" disabled={!cameraAvailable || runtime?.processes?.depth_camera === "running"} onClick={() => void perform("depth/start")}><Play />启动深度相机</Button>
+            <Button loading={actions.isPending("depth/stop")} loadingText="正在停止" disabled={!currentRobot.online || runtime?.processes?.depth_camera !== "running"} onClick={() => void perform("depth/stop")}><Square />停止深度相机</Button>
+          </div>
         </div>
         {!cameraAvailable && <InlineActionStatus tone="warning" title="摄像头暂不可用" detail={!currentRobot.enabled ? "车辆已停用，不能建立视频预览。" : "车辆离线，待重新上线后可打开摄像头。"} />}
-        <CameraPreview api={api!} robotId={robotId} active={cameraActive} online={currentRobot.online} device={runtime?.video?.device ? String(runtime.video.device) : undefined} streaming={runtime?.video?.streaming} />
+        {panelState.camera && <InlineActionStatus {...panelState.camera} />}
+        <CameraPreview api={api!} robotId={robotId} active={cameraActive} online={currentRobot.online} device={runtime?.video?.device ? String(runtime.video.device) : undefined} streaming={runtime?.video?.streaming} depth={runtime?.depth ? { has_depth: Boolean(runtime.depth.has_depth), encoding: runtime.depth.encoding ? String(runtime.depth.encoding) : undefined, topic: runtime.depth.topic ? String(runtime.depth.topic) : undefined, last_error: runtime.depth.last_error ? String(runtime.depth.last_error) : null } : undefined} />
       </Card>
 
       <Card className="panel span-2">

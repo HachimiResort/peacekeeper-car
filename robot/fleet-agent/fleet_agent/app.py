@@ -19,9 +19,9 @@ from .mapping import MappingService
 from .navigation import NavigationService
 from .patrol import PatrolService
 from .process_manager import ProcessManager
-from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
+from .ros_control import DepthFrameSubscriber, DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from .rosmaster_control import RosmasterController
-from .schemas import CmdVelRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
+from .schemas import CmdVelRequest, DepthMeasureRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
 from .video import VideoService
 
@@ -79,6 +79,10 @@ def create_app(config: AgentConfig) -> FastAPI:
         setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
     )
     video = VideoService(config.video, run_dir)
+    depth = DepthFrameSubscriber(
+        config.depth,
+        setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
+    )
     mapping = MappingService(config, process_manager)
     navigation = NavigationService(
         config,
@@ -108,6 +112,10 @@ def create_app(config: AgentConfig) -> FastAPI:
             live_map.start()
         except Exception as exc:
             state.set_error(f"Live map preview failed: {exc}")
+        try:
+            depth.start()
+        except Exception as exc:
+            state.set_error(f"Depth subscriber failed: {exc}")
         if direct_cmd_vel is not None:
             try:
                 direct_cmd_vel.start()
@@ -119,6 +127,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             patrol.shutdown()
             navigation.shutdown()
             live_map.shutdown()
+            depth.shutdown()
             direct_odom.shutdown()
             if direct_cmd_vel is not None:
                 direct_cmd_vel.shutdown()
@@ -169,6 +178,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             },
             "process_details": process_status,
             "video": video.status(),
+            "depth": depth.status(),
             "navigation": navigation.status(),
             "patrol": patrol.status(),
             "ros": ros_status,
@@ -258,6 +268,21 @@ def create_app(config: AgentConfig) -> FastAPI:
     async def video_sample_jpg():
         frame = await _run_blocking(video.read_jpeg)
         return Response(frame, media_type="image/jpeg")
+
+    @app.get("/api/depth/status")
+    async def depth_status():
+        return JSONResponse({"ok": True, **await _run_blocking(depth.status)})
+
+    @app.post("/api/depth/measure")
+    async def depth_measure(payload: DepthMeasureRequest):
+        try:
+            result = await _run_blocking(depth.measure, payload.x_ratio, payload.y_ratio, payload.window_radius_px)
+            return JSONResponse(result)
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
 
     @app.get("/api/mapping/latest")
     async def mapping_latest(name: Optional[str] = Query(default=None)):

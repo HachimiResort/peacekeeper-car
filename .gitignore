@@ -19,3 +19,6 @@ apps/mission-api/.pytest_cache/
 
 extra/
 docs/
+apps/web-console/android/
+file/
+apps/web-console/dist/index.html

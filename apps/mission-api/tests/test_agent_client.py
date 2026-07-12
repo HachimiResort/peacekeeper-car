@@ -103,3 +103,47 @@ async def test_agent_client_reads_video_sample_as_bytes():
 
     assert image.startswith(b"\xff\xd8\xff")
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_client_reads_depth_status():
+    async def handler(request: httpx.Request):
+        assert request.url.path == "/api/depth/status"
+        return httpx.Response(200, json={"ok": True, "has_depth": True, "encoding": "16UC1"})
+
+    client = FleetAgentClient("test-token", 2, 5, 120)
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        headers={"X-Peacekeeper-Token": "test-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    robot = Robot(id="car_1", name="Car 1", base_url="http://car-1", capabilities={})
+
+    result = await client.depth_status(robot)
+
+    assert result["has_depth"] is True
+    assert result["encoding"] == "16UC1"
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_client_posts_depth_measure_payload():
+    async def handler(request: httpx.Request):
+        assert request.url.path == "/api/depth/measure"
+        payload = await request.aread()
+        assert b'"x_ratio":0.5' in payload
+        assert b'"window_radius_px":6' in payload
+        return httpx.Response(200, json={"ok": True, "distance_m": 1.42})
+
+    client = FleetAgentClient("test-token", 2, 5, 120)
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        headers={"X-Peacekeeper-Token": "test-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    robot = Robot(id="car_1", name="Car 1", base_url="http://car-1", capabilities={})
+
+    result = await client.depth_measure(robot, {"x_ratio": 0.5, "y_ratio": 0.25, "window_radius_px": 6})
+
+    assert result["distance_m"] == 1.42
+    await client.close()
