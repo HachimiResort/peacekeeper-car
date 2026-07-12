@@ -1,4 +1,4 @@
-import type { AlertRecord, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StoredMap, VehicleSavedMap } from "../api/types"
+import type { AlertRecord, DepthMeasurement, DepthStatus, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StoredMap, VehicleSavedMap } from "../api/types"
 
 const now = new Date()
 const iso = (minutes = 0) => new Date(now.getTime() - minutes * 60_000).toISOString()
@@ -7,7 +7,7 @@ const robots: Robot[] = [
   {
     id: "car_1", name: "苍松一号", base_url: "http://10.60.162.192:8001", role: "leader", enabled: true,
     capabilities: { mapping: true, navigation: true, patrol: true }, last_seen: iso(), online: true,
-    runtime_status: { mode: "NAV_PATROL", processes: { lidar: "running", slam: "stopped" }, navigation: { action_state: "active", current_map: "forest_lab__v3" }, patrol: { state: "running", current_index: 1, total_points: 4 }, ros: { last_speed: 25, publisher_ready: true } },
+    runtime_status: { mode: "NAV_PATROL", processes: { lidar: "running", slam: "stopped" }, navigation: { action_state: "active", current_map: "forest_lab__v3" }, patrol: { state: "running", current_index: 1, total_points: 4 }, video: { streaming: true, device: "demo-camera" }, depth: { has_depth: true, encoding: "16UC1", topic: "/camera/depth/image_raw" }, ros: { last_speed: 25, publisher_ready: true } },
   },
   {
     id: "car_2", name: "云杉二号", base_url: "http://10.60.162.193:8001", role: "wing", enabled: true,
@@ -71,11 +71,20 @@ export class DemoMissionApi implements MissionApi {
   async robotAction(id: string, path: string, payload: JsonObject = {}) {
     const robot = robots.find((item) => item.id === id); if (!robot) throw new Error("车辆不存在")
     const status = (robot.runtime_status ||= {}) as JsonObject
+    const processes = (status.processes ||= {}) as Record<string, string>
     if (path === "control/estop") status.mode = "EMERGENCY_STOP"
     if (path === "control/clear-estop") status.mode = "IDLE"
     if (path === "control/stop") status.mode = "IDLE"
     if (path === "mapping/start") status.mode = "MAPPING"
     if (path === "mapping/stop") status.mode = "IDLE"
+    if (path === "depth/start") {
+      processes.depth_camera = "running"
+      status.depth = { has_depth: true, encoding: "16UC1", topic: "/camera/depth/image_raw" }
+    }
+    if (path === "depth/stop") {
+      processes.depth_camera = "stopped"
+      status.depth = { has_depth: false, encoding: "16UC1", topic: "/camera/depth/image_raw" }
+    }
     return { ok: true, demo: true, path, payload }
   }
   async fleetStop() { robots.forEach((robot) => { if (robot.runtime_status) robot.runtime_status.mode = "IDLE" }); return { ok: true, demo: true } }
@@ -112,6 +121,45 @@ export class DemoMissionApi implements MissionApi {
   async videoSample(_robotId: string) {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="100%" height="100%" fill="#0f1b17"/><rect x="70" y="70" width="820" height="400" rx="28" fill="#1d3a31" stroke="#78c29b" stroke-width="6"/><circle cx="225" cy="270" r="84" fill="#2f7659"/><circle cx="225" cy="270" r="45" fill="#9fe0bc"/><path d="M410 215h300M410 270h210M410 325h265" stroke="#d8efe3" stroke-width="18" stroke-linecap="round"/><text x="72" y="40" font-family="sans-serif" font-size="28" fill="#9fe0bc">camera demo</text></svg>`
     return new Blob([svg], { type: "image/svg+xml" })
+  }
+  videoStreamUrl(_robotId: string) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="100%" height="100%" fill="#0f1b17"/><rect x="70" y="70" width="820" height="400" rx="28" fill="#1d3a31" stroke="#78c29b" stroke-width="6"/><circle cx="225" cy="270" r="84" fill="#2f7659"/><circle cx="225" cy="270" r="45" fill="#9fe0bc"/><path d="M410 215h300M410 270h210M410 325h265" stroke="#d8efe3" stroke-width="18" stroke-linecap="round"/><text x="72" y="40" font-family="sans-serif" font-size="28" fill="#9fe0bc">camera stream demo</text></svg>`
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+  }
+  async depthStatus(_robotId: string): Promise<DepthStatus> {
+    return {
+      available: true,
+      ready: true,
+      has_depth: true,
+      topic: "/camera/depth/image_raw",
+      message_count: 128,
+      last_received_at: Date.now() / 1000,
+      age_s: 0.1,
+      width: 640,
+      height: 480,
+      encoding: "16UC1",
+      step: 1280,
+      last_error: null,
+      spin_thread_alive: true,
+    }
+  }
+  async depthMeasure(_robotId: string, payload: { x_ratio: number; y_ratio: number; window_radius_px?: number }): Promise<DepthMeasurement> {
+    const distance = 0.72 + payload.x_ratio * 0.9 + payload.y_ratio * 0.4
+    return {
+      ok: true,
+      distance_m: Number(distance.toFixed(3)),
+      distance_mm: Math.round(distance * 1000),
+      x_ratio: payload.x_ratio,
+      y_ratio: payload.y_ratio,
+      pixel_x: Math.round(payload.x_ratio * 639),
+      pixel_y: Math.round(payload.y_ratio * 479),
+      window_radius_px: payload.window_radius_px ?? 6,
+      sample_count: 25,
+      width: 640,
+      height: 480,
+      encoding: "16UC1",
+      last_received_at: Date.now() / 1000,
+    }
   }
   async mapDownload(id: string) { return new Blob([`demo bundle ${id}`], { type: "application/zip" }) }
   async uploadMap(file: File, logicalName?: string) { return { ok: true, demo: true, filename: file.name, logical_name: logicalName } }

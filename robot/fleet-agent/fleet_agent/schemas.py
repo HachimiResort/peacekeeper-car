@@ -50,3 +50,9 @@ class SnapshotResponse(BaseModel):
     ok: bool
     path: Optional[str] = None
     message: Optional[str] = None
+
+
+class DepthMeasureRequest(BaseModel):
+    x_ratio: float = Field(ge=0.0, le=1.0)
+    y_ratio: float = Field(ge=0.0, le=1.0)
+    window_radius_px: Optional[int] = Field(default=None, ge=0, le=40)

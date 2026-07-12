@@ -104,6 +104,38 @@ export interface VehicleSavedMap {
   size_bytes: number
 }
 
+export interface DepthStatus {
+  available: boolean
+  ready: boolean
+  has_depth: boolean
+  topic: string
+  message_count: number
+  last_received_at: number | null
+  age_s: number | null
+  width: number
+  height: number
+  encoding: string
+  step: number
+  last_error: string | null
+  spin_thread_alive: boolean
+}
+
+export interface DepthMeasurement {
+  ok: true
+  distance_m: number
+  distance_mm: number
+  x_ratio: number
+  y_ratio: number
+  pixel_x: number
+  pixel_y: number
+  window_radius_px: number
+  sample_count: number
+  width: number
+  height: number
+  encoding: string
+  last_received_at: number | null
+}
+
 export interface MissionApi {
   health(): Promise<boolean>
   overview(): Promise<Overview>
@@ -121,6 +153,9 @@ export interface MissionApi {
   liveMapStatus(robotId: string): Promise<LiveMapStatus>
   liveMapPreview(robotId: string): Promise<Blob>
   videoSample(robotId: string): Promise<Blob>
+  videoStreamUrl(robotId: string): string
+  depthStatus(robotId: string): Promise<DepthStatus>
+  depthMeasure(robotId: string, payload: { x_ratio: number; y_ratio: number; window_radius_px?: number }): Promise<DepthMeasurement>
   mapDownload(id: string): Promise<Blob>
   uploadMap(file: File, logicalName?: string): Promise<JsonObject>
   importMap(payload: { robot_id: string; map_name: string; logical_name?: string }): Promise<JsonObject>

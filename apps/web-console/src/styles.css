@@ -213,11 +213,23 @@ label > span { display: block; margin-bottom: 6px; color: var(--muted); font-siz
 .camera-preview-head strong svg { width: 15px; color: var(--primary); }
 .camera-preview-head > div > span, .camera-preview-footer { color: var(--muted); font-size: .69rem; }
 .camera-preview-frame { position: relative; display: grid; min-height: 320px; max-height: 520px; place-items: center; overflow: hidden; background: linear-gradient(180deg, #13231e, #0b1311); }
-.camera-preview-frame img { display: block; width: 100%; max-height: 520px; object-fit: contain; }
+.camera-preview-stage { position: relative; width: 100%; height: 100%; }
+.camera-preview-frame img { display: block; width: 100%; max-height: 520px; object-fit: contain; cursor: crosshair; }
+.camera-preview-hint { position: absolute; left: 12px; bottom: 12px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: rgb(7 18 15 / 78%); color: #eef8f2; font-size: .71rem; pointer-events: none; }
+.camera-preview-hint svg { width: 14px; height: 14px; }
+.camera-measure-marker { position: absolute; width: 26px; height: 26px; display: grid; place-items: center; color: #fff; border: 2px solid #fff; border-radius: 999px; background: rgb(201 75 69 / 82%); transform: translate(-50%, -50%); box-shadow: 0 4px 14px rgb(0 0 0 / 30%); pointer-events: none; }
+.camera-measure-marker svg { width: 14px; height: 14px; }
 .camera-preview-empty { display: grid; max-width: 320px; gap: 7px; padding: 24px; color: #b8ccc2; text-align: center; font-size: .74rem; }
 .camera-preview-empty svg { width: 22px; height: 22px; margin: 0 auto; color: #9fe0bc; }
 .camera-preview-empty strong { color: #eef8f2; font-size: .84rem; }
 .camera-preview-footer { border-top: 1px solid var(--border); }
+.camera-measure-panel { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--card) 76%, #dff0e8); }
+.camera-measure-panel strong, .camera-measure-panel span { display: flex; align-items: center; gap: 6px; }
+.camera-measure-panel > div > strong { font-size: .78rem; }
+.camera-measure-panel > div > strong svg { width: 14px; color: var(--primary); }
+.camera-measure-panel > div > span, .camera-measure-result span { color: var(--muted); font-size: .7rem; }
+.camera-measure-result { display: grid; justify-items: end; gap: 3px; }
+.camera-measure-result strong { color: var(--primary-strong); font-size: 1.1rem; }
 .camera-preview-warning { padding: 8px 12px; border-top: 1px solid color-mix(in srgb, var(--warning) 24%, var(--border)); color: #8b5c0d; background: color-mix(in srgb, var(--warning) 10%, transparent); font-size: .71rem; }
 .nav-workspace { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); align-items: start; }.navigation-map-canvas { height: clamp(720px, 82vh, 1200px); }
 
