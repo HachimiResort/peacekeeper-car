@@ -13,7 +13,9 @@ COPY alembic.ini /app/
 COPY migrations /app/migrations
 COPY docker-entrypoint.sh /app/
 
-RUN pip install --no-cache-dir . && chmod +x /app/docker-entrypoint.sh \
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh \
+    && pip install --no-cache-dir . \
+    && chmod +x /app/docker-entrypoint.sh \
     && mkdir -p /var/lib/peacekeeper/maps /app/config \
     && chown -R peacekeeper:peacekeeper /var/lib/peacekeeper /app
 
@@ -21,4 +23,4 @@ USER peacekeeper
 
 EXPOSE 8080
 
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]

@@ -640,7 +640,7 @@ def create_app(config: AgentConfig) -> FastAPI:
     @app.post("/api/navigation/cancel")
     async def navigation_cancel():
         await _run_blocking(patrol.cancel, "navigation_cancel")
-        result = await _run_blocking(navigation.cancel_goal)
+        result = await _run_blocking(navigation.cancel_goal, 1.5)
         await _run_blocking(cmd_vel.stop)
         status_code = 200 if result.get("ok", False) else 500
         return JSONResponse({"ok": result.get("ok", False), "mode": state.mode.value, "navigation": result}, status_code=status_code)

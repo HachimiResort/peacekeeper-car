@@ -58,6 +58,8 @@ class FakeManagedProcessManager:
         self.config = config
         self.started = []
         self.stopped = []
+        self.dynamic_processes = {}
+        self.dynamic_starts = []
 
     def start_auto_processes(self):
         return None
@@ -65,6 +67,12 @@ class FakeManagedProcessManager:
     def start(self, key):
         self.started.append(key)
         return {"name": key, "status": "running"}
+
+    def start_dynamic(self, key, name, command):
+        self.dynamic_processes[key] = {"name": name, "command": command}
+        self.dynamic_starts.append((key, name, command))
+        self.started.append(key)
+        return {"name": name, "status": "running"}
 
     def stop(self, key, timeout_s=4.0):
         del timeout_s
@@ -76,10 +84,17 @@ class FakeManagedProcessManager:
         return self.status()
 
     def status(self):
-        return {
+        statuses = {
             key: {"name": value.name, "status": "running" if key in self.started else "stopped"}
             for key, value in self.config.processes.items()
         }
+        statuses.update(
+            {
+                key: {"name": value["name"], "status": "running" if key in self.started else "stopped"}
+                for key, value in self.dynamic_processes.items()
+            }
+        )
+        return statuses
 
     def topic_active(self, topic):
         del topic
@@ -169,7 +184,8 @@ class FakeNavigationService:
             raise RuntimeError("Nav2 is not running; call /api/navigation/start first")
         return {"ok": True, "goal_id": "fake-goal", "goal": {"x": x, "y": y, "yaw": yaw}}
 
-    def cancel_goal(self):
+    def cancel_goal(self, wait_timeout_s=0.0):
+        del wait_timeout_s
         self.cancel_count += 1
         return {"ok": True, "action_state": "canceled"}
 
@@ -403,6 +419,353 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(result["state"], "succeeded")
         self.assertEqual(result["status_code"], 4)
+
+    def test_navigation_cancel_goal_forces_local_cleanup_when_cancel_stalls(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.shutdown_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        class FakeNode:
+            def __init__(self):
+                self.destroy_called = False
+
+            def destroy_node(self):
+                self.destroy_called = True
+
+        class FakeThread:
+            def __init__(self):
+                self.join_called = False
+
+            def is_alive(self):
+                return True
+
+            def join(self, timeout=None):
+                del timeout
+                self.join_called = True
+
+        config = AgentConfig()
+        service = NavigationService(config, FakeManagedProcessManager(config), ("", ""))
+        fake_executor = FakeExecutor()
+        fake_node = FakeNode()
+        fake_thread = FakeThread()
+        service.executor = fake_executor
+        service.node = fake_node
+        service.spin_thread = fake_thread
+        service.action_client = object()
+        service.current_goal = {"id": "nav-4"}
+        with service.condition:
+            service._active_goal_id = "nav-4"
+            service.action_state = "canceling"
+            service._cancel_requested = True
+            service._cancel_sent = True
+            service._cancel_requested_at = time.monotonic() - 10.0
+
+        result = service.cancel_goal(wait_timeout_s=0.01)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action_state"], "canceled")
+        self.assertIsNone(service._active_goal_id)
+        self.assertEqual(service.last_result["goal_id"], "nav-4")
+        self.assertEqual(service.last_result["state"], "canceled")
+        self.assertTrue(fake_executor.shutdown_called)
+        self.assertTrue(fake_node.destroy_called)
+        self.assertTrue(fake_thread.join_called)
+
+    def test_navigation_send_goal_recovers_from_stale_canceling_goal(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.shutdown_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        class FakeOldNode:
+            def __init__(self):
+                self.destroy_called = False
+
+            def destroy_node(self):
+                self.destroy_called = True
+
+        class FakeThread:
+            def __init__(self):
+                self.join_called = False
+
+            def is_alive(self):
+                return True
+
+            def join(self, timeout=None):
+                del timeout
+                self.join_called = True
+
+        class FakeNow:
+            def to_msg(self):
+                return {"stamp": "now"}
+
+        class FakeClock:
+            def now(self):
+                return FakeNow()
+
+        class FakeNewNode:
+            def get_clock(self):
+                return FakeClock()
+
+        class FakeHeader:
+            def __init__(self):
+                self.frame_id = None
+                self.stamp = None
+
+        class FakePosition:
+            def __init__(self):
+                self.x = 0.0
+                self.y = 0.0
+                self.z = 0.0
+
+        class FakeOrientation:
+            def __init__(self):
+                self.x = 0.0
+                self.y = 0.0
+                self.z = 0.0
+                self.w = 1.0
+
+        class FakePose:
+            def __init__(self):
+                self.position = FakePosition()
+                self.orientation = FakeOrientation()
+
+        class FakePoseStamped:
+            def __init__(self):
+                self.header = FakeHeader()
+                self.pose = FakePose()
+
+        class FakeNavigateToPose:
+            class Goal:
+                def __init__(self):
+                    self.pose = FakePoseStamped()
+
+        class FakeSendFuture:
+            def __init__(self):
+                self.callbacks = []
+
+            def add_done_callback(self, callback):
+                self.callbacks.append(callback)
+
+        class FakeActionClient:
+            def __init__(self, node, action_type, topic):
+                self.node = node
+                self.action_type = action_type
+                self.topic = topic
+                self.last_goal = None
+
+            def wait_for_server(self, timeout_sec=0.0):
+                del timeout_sec
+                return True
+
+            def send_goal_async(self, goal_msg, feedback_callback=None):
+                del feedback_callback
+                self.last_goal = goal_msg
+                return FakeSendFuture()
+
+        config = AgentConfig()
+        service = NavigationService(config, FakeManagedProcessManager(config), ("", ""))
+        old_executor = FakeExecutor()
+        old_node = FakeOldNode()
+        old_thread = FakeThread()
+        service.executor = old_executor
+        service.node = old_node
+        service.spin_thread = old_thread
+        service.action_client = object()
+        service.current_goal = {"id": "nav-4", "x": 0.0, "y": 0.0, "yaw": 0.0}
+
+        def fake_require_running():
+            return None
+
+        def fake_ensure_ros_node():
+            service.node = FakeNewNode()
+            service._ros_types = {
+                "NavigateToPose": FakeNavigateToPose,
+                "ActionClient": FakeActionClient,
+            }
+
+        service._require_running = fake_require_running
+        service._ensure_ros_node = fake_ensure_ros_node
+
+        with service.condition:
+            service._active_goal_id = "nav-4"
+            service.action_state = "canceling"
+            service._cancel_requested = True
+            service._cancel_sent = True
+            service._cancel_requested_at = time.monotonic() - 10.0
+
+        result = service.send_goal(1.0, 2.0, 0.5)
+
+        self.assertEqual(result["goal_id"], "nav-1")
+        self.assertEqual(result["action_state"], "sending")
+        self.assertEqual(service.last_result["goal_id"], "nav-4")
+        self.assertEqual(service.last_result["state"], "canceled")
+        self.assertEqual(service._active_goal_id, "nav-1")
+        self.assertTrue(old_executor.shutdown_called)
+        self.assertTrue(old_node.destroy_called)
+        self.assertTrue(old_thread.join_called)
+
+    def test_navigation_start_resets_stale_ros_client_before_relaunch(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.shutdown_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        class FakeNode:
+            def __init__(self):
+                self.destroy_called = False
+
+            def destroy_node(self):
+                self.destroy_called = True
+
+        class FakeThread:
+            def __init__(self):
+                self.join_called = False
+
+            def is_alive(self):
+                return True
+
+            def join(self, timeout=None):
+                del timeout
+                self.join_called = True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            maps_dir = Path(temp_dir) / "maps"
+            maps_dir.mkdir()
+            (maps_dir / "lab.yaml").write_text("image: lab.pgm\n", encoding="utf-8")
+            config = AgentConfig(data_dir=temp_dir)
+            fake_pm = FakeManagedProcessManager(config)
+            service = NavigationService(config, fake_pm, ("", ""))
+            fake_executor = FakeExecutor()
+            fake_node = FakeNode()
+            fake_thread = FakeThread()
+            service.executor = fake_executor
+            service.node = fake_node
+            service.spin_thread = fake_thread
+            service.initial_pose_pub = object()
+            service.action_client = object()
+            service.goal_handle = object()
+            service.goal_future = object()
+            service._ros_types = {"ActionClient": object}
+
+            status = service.start("lab")
+
+            self.assertEqual(status["current_map"], "lab")
+            self.assertEqual(fake_pm.dynamic_starts[0][0], "nav2")
+            self.assertTrue(fake_executor.shutdown_called)
+            self.assertTrue(fake_node.destroy_called)
+            self.assertTrue(fake_thread.join_called)
+            self.assertIsNone(service.node)
+            self.assertIsNone(service.executor)
+            self.assertIsNone(service.spin_thread)
+            self.assertIsNone(service.action_client)
+            self.assertIsNone(service.initial_pose_pub)
+
+    def test_navigation_stop_resets_ros_client_state(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.shutdown_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        class FakeNode:
+            def __init__(self):
+                self.destroy_called = False
+
+            def destroy_node(self):
+                self.destroy_called = True
+
+        class FakeThread:
+            def __init__(self):
+                self.join_called = False
+
+            def is_alive(self):
+                return True
+
+            def join(self, timeout=None):
+                del timeout
+                self.join_called = True
+
+        config = AgentConfig()
+        service = NavigationService(config, FakeManagedProcessManager(config), ("", ""))
+        fake_executor = FakeExecutor()
+        fake_node = FakeNode()
+        fake_thread = FakeThread()
+        service.current_map_name = "lab"
+        service.executor = fake_executor
+        service.node = fake_node
+        service.spin_thread = fake_thread
+        service.initial_pose_pub = object()
+        service.action_client = object()
+        service.goal_handle = object()
+        service.goal_future = object()
+        service._ros_types = {"ActionClient": object}
+
+        result = service.stop()
+
+        self.assertEqual(result["current_map"], None)
+        self.assertTrue(fake_executor.shutdown_called)
+        self.assertTrue(fake_node.destroy_called)
+        self.assertTrue(fake_thread.join_called)
+        self.assertIsNone(service.node)
+        self.assertIsNone(service.executor)
+        self.assertIsNone(service.spin_thread)
+        self.assertIsNone(service.action_client)
+        self.assertIsNone(service.initial_pose_pub)
+
+    def test_navigation_reset_destroys_action_client_before_node(self):
+        events = []
+
+        class FakeExecutor:
+            def shutdown(self):
+                events.append("executor.shutdown")
+
+        class FakePublisher:
+            pass
+
+        class FakeActionClient:
+            def destroy(self):
+                events.append("action_client.destroy")
+
+        class FakeNode:
+            def destroy_publisher(self, publisher):
+                del publisher
+                events.append("node.destroy_publisher")
+
+            def destroy_node(self):
+                events.append("node.destroy_node")
+
+        class FakeThread:
+            def is_alive(self):
+                return False
+
+        config = AgentConfig()
+        service = NavigationService(config, FakeManagedProcessManager(config), ("", ""))
+        service.executor = FakeExecutor()
+        service.node = FakeNode()
+        service.spin_thread = FakeThread()
+        service.initial_pose_pub = FakePublisher()
+        service.action_client = FakeActionClient()
+
+        service._reset_ros_interfaces()
+
+        self.assertEqual(
+            events,
+            [
+                "executor.shutdown",
+                "action_client.destroy",
+                "node.destroy_publisher",
+                "node.destroy_node",
+            ],
+        )
 
     def test_patrol_executes_points_in_order_and_converts_yaw_degrees(self):
         navigation = FakePatrolNavigation()
