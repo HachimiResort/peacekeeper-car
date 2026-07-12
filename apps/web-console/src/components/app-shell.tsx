@@ -2,8 +2,9 @@ import { useEffect, useState } from "react"
 import { Activity, Bell, Bot, ChevronRight, Command, Database, LogOut, Map, Menu, Moon, Octagon, ScrollText, Sun, X } from "lucide-react"
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import { useSession } from "../app/session"
+import { useFeedback } from "../app/feedback"
 import { LiveStatusProvider, useLiveStatus } from "../app/live-status"
-import { Button } from "./ui"
+import { Button, InlineActionStatus } from "./ui"
 import { cn } from "../lib/cn"
 
 const navigation = [
@@ -24,6 +25,8 @@ function AppShellContent() {
   const [dark, setDark] = useState(() => localStorage.getItem("peacekeeper.theme") === "dark")
   const { connected: live } = useLiveStatus()
   const [stopping, setStopping] = useState(false)
+  const [fleetState, setFleetState] = useState<{ tone: "success" | "error" | "info"; title: string; detail?: string } | null>(null)
+  const feedback = useFeedback()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -35,11 +38,15 @@ function AppShellContent() {
   const fleetStop = async () => {
     if (!api || stopping) return
     setStopping(true)
+    setFleetState({ tone: "info", title: "正在向全部启用车辆下发停车指令" })
     try {
-      const result = await api.fleetStop()
-      window.alert(`全局停车已下发\n${JSON.stringify(result, null, 2)}`)
+      await api.fleetStop()
+      setFleetState({ tone: "success", title: "全局停车指令已下发", detail: "车辆状态将通过实时链路继续更新" })
+      feedback.notify({ id: "fleet-stop", title: "全局停车指令已下发", tone: "success" })
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : "全局停车失败")
+      const message = error instanceof Error ? error.message : "全局停车失败"
+      setFleetState({ tone: "error", title: "全局停车未完成", detail: message })
+      feedback.notify({ id: "fleet-stop", title: "全局停车未完成", description: message, tone: "error" })
     } finally {
       setStopping(false)
     }
@@ -72,10 +79,10 @@ function AppShellContent() {
           <div className="breadcrumb"><Database size={16} /><span>中心控制面</span><ChevronRight size={14} /><strong>{title}</strong></div>
           <div className="topbar-actions">
             <Button variant="ghost" aria-label="切换主题" onClick={() => setDark((value) => !value)}>{dark ? <Sun size={18} /> : <Moon size={18} />}</Button>
-            <Button variant="danger" onClick={fleetStop} disabled={stopping}><Octagon size={17} />{stopping ? "下发中" : "全局停车"}</Button>
+            <Button variant="danger" onClick={fleetStop} loading={stopping} loadingText="下发中"><Octagon size={17} />全局停车</Button>
           </div>
         </header>
-        <main className="page-stage"><Outlet /></main>
+        <main className="page-stage">{fleetState && <div className="shell-action-status"><InlineActionStatus {...fleetState} /></div>}<Outlet /></main>
       </div>
     </div>
   )

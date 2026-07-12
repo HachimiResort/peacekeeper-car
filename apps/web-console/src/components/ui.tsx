@@ -1,6 +1,7 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react"
+import { Dialog } from "@base-ui/react/dialog"
+import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode, RefObject } from "react"
 import { cva, type VariantProps } from "class-variance-authority"
-import { X } from "lucide-react"
+import { CircleAlert, CircleCheck, Info, LoaderCircle, X } from "lucide-react"
 import { cn } from "../lib/cn"
 
 const buttonVariants = cva("inline-flex items-center justify-center gap-2 rounded-lg border text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45", {
@@ -17,8 +18,8 @@ const buttonVariants = cva("inline-flex items-center justify-center gap-2 rounde
   defaultVariants: { variant: "secondary", size: "md" },
 })
 
-export function Button({ className, variant, size, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants>) {
-  return <button className={cn(buttonVariants({ variant, size }), className)} {...props} />
+export function Button({ className, variant, size, loading = false, loadingText, disabled, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants> & { loading?: boolean; loadingText?: string }) {
+  return <button className={cn(buttonVariants({ variant, size }), className)} disabled={disabled || loading} aria-busy={loading || undefined} {...props}>{loading && <LoaderCircle className="button-spinner" />}{loading ? loadingText || children : children}</button>
 }
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
@@ -46,21 +47,26 @@ export function PageHeader({ eyebrow, title, description, actions }: { eyebrow?:
   )
 }
 
-export function Modal({ open, title, children, onClose, footer }: { open: boolean; title: string; children: ReactNode; onClose(): void; footer?: ReactNode }) {
-  if (!open) return null
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <section className="modal" role="dialog" aria-modal="true" aria-label={title}>
-        <header><h2>{title}</h2><Button variant="ghost" aria-label="关闭" onClick={onClose}><X size={18} /></Button></header>
+export function Modal({ open, title, children, onClose, footer, busy = false, dismissible = true, initialFocus }: { open: boolean; title: string; children: ReactNode; onClose(): void; footer?: ReactNode; busy?: boolean; dismissible?: boolean; initialFocus?: boolean | RefObject<HTMLElement | null> }) {
+  return <Dialog.Root open={open} disablePointerDismissal={!dismissible || busy} onOpenChange={(nextOpen) => { if (!nextOpen && dismissible && !busy) onClose() }}>
+    <Dialog.Portal>
+      <Dialog.Backdrop className="modal-backdrop" />
+      <Dialog.Popup className="modal" initialFocus={initialFocus}>
+        <header><Dialog.Title>{title}</Dialog.Title><Button variant="ghost" aria-label="关闭" disabled={!dismissible || busy} onClick={onClose}><X size={18} /></Button></header>
         <div className="modal-body">{children}</div>
         {footer && <footer>{footer}</footer>}
-      </section>
-    </div>
-  )
+      </Dialog.Popup>
+    </Dialog.Portal>
+  </Dialog.Root>
 }
 
-export function EmptyState({ title, detail }: { title: string; detail: string }) {
-  return <div className="empty-state"><strong>{title}</strong><span>{detail}</span></div>
+export function InlineActionStatus({ tone = "info", title, detail, onRetry }: { tone?: "info" | "success" | "error" | "warning"; title: string; detail?: string; onRetry?: () => void }) {
+  const Icon = tone === "success" ? CircleCheck : tone === "error" ? CircleAlert : Info
+  return <div className={cn("inline-action-status", `is-${tone}`)} role={tone === "error" ? "alert" : "status"}><Icon /><div><strong>{title}</strong>{detail && <span>{detail}</span>}</div>{onRetry && <Button size="sm" onClick={onRetry}>重试</Button>}</div>
+}
+
+export function EmptyState({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) {
+  return <div className="empty-state"><strong>{title}</strong><span>{detail}</span>{action}</div>
 }
 
 export function LoadingBlock({ label = "正在同步数据" }: { label?: string }) {
