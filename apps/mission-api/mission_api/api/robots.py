@@ -1,7 +1,7 @@
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -182,6 +182,30 @@ async def video_sample(robot_id: str, request: Request, session: AsyncSession = 
         image,
         media_type="image/jpeg",
         headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@router.get("/{robot_id}/video/stream.mjpg")
+async def video_stream(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    upstream = await request.app.state.agent_client.open_video_stream(robot)
+
+    async def stream_bytes():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+
+    return StreamingResponse(
+        stream_bytes(),
+        media_type=upstream.headers.get("content-type", "multipart/x-mixed-replace; boundary=frame"),
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

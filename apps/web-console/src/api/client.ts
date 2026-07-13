@@ -93,6 +93,9 @@ export class HttpMissionApi implements MissionApi {
   async liveMapStatus(robotId: string) { return this.request<LiveMapStatus>(`/api/robots/${encodeURIComponent(robotId)}/mapping/live-meta`) }
   async liveMapPreview(robotId: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/mapping/live.png`) }
   async videoSample(robotId: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/video/sample.jpg`) }
+  videoStreamUrl(robotId: string) {
+    return `/api/robots/${encodeURIComponent(robotId)}/video/stream.mjpg?token=${encodeURIComponent(this.token)}`
+  }
   async visionStatus(robotId: string) { return this.request<VisionStatus>(`/api/robots/${encodeURIComponent(robotId)}/vision/status`) }
   async visionCapture(robotId: string) { return this.request<VisionCapture>(`/api/robots/${encodeURIComponent(robotId)}/vision/capture`, { method: "POST", body: "{}" }) }
   async visionLatest(robotId: string) { return this.request<VisionCapture>(`/api/robots/${encodeURIComponent(robotId)}/vision/latest`) }

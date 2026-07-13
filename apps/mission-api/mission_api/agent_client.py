@@ -81,6 +81,23 @@ class FleetAgentClient:
             "video_sample_failed",
         )
 
+    async def open_video_stream(self, robot: Robot) -> httpx.Response:
+        url = f"{robot.base_url.rstrip('/')}/video.mjpg"
+        request = self.client.build_request("GET", url)
+        try:
+            response = await self.client.send(request, stream=True)
+        except httpx.TimeoutException as exc:
+            raise AgentError(504, "agent_timeout", f"Request to {robot.id} timed out", {"url": url}) from exc
+        except httpx.HTTPError as exc:
+            raise AgentError(503, "agent_unreachable", f"Robot {robot.id} is unreachable", {"url": url}) from exc
+        if response.is_error:
+            data = self._json(response)
+            await response.aclose()
+            message = data.get("message") or response.reason_phrase
+            status = 409 if response.status_code == 409 else 502
+            raise AgentError(status, "video_stream_failed", str(message), {"agent_status": response.status_code})
+        return response
+
     async def saved_maps(self, robot: Robot) -> dict[str, Any]:
         return await self.request(robot, "GET", "/api/maps/saved", timeout_s=self.status_timeout_s)
 

@@ -166,6 +166,10 @@ export class DemoMissionApi implements MissionApi {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="100%" height="100%" fill="#0f1b17"/><rect x="70" y="70" width="820" height="400" rx="28" fill="#1d3a31" stroke="#78c29b" stroke-width="6"/><circle cx="225" cy="270" r="84" fill="#2f7659"/><circle cx="225" cy="270" r="45" fill="#9fe0bc"/><path d="M410 215h300M410 270h210M410 325h265" stroke="#d8efe3" stroke-width="18" stroke-linecap="round"/><text x="72" y="40" font-family="sans-serif" font-size="28" fill="#9fe0bc">camera demo</text></svg>`
     return new Blob([svg], { type: "image/svg+xml" })
   }
+  videoStreamUrl(_robotId: string) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="100%" height="100%" fill="#0f1b17"/><rect x="70" y="70" width="820" height="400" rx="28" fill="#1d3a31" stroke="#78c29b" stroke-width="6"/><circle cx="225" cy="270" r="84" fill="#2f7659"/><circle cx="225" cy="270" r="45" fill="#9fe0bc"/><path d="M410 215h300M410 270h210M410 325h265" stroke="#d8efe3" stroke-width="18" stroke-linecap="round"/><text x="72" y="40" font-family="sans-serif" font-size="28" fill="#9fe0bc">camera demo</text></svg>`
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  }
   async visionStatus(_robotId: string): Promise<VisionStatus> {
     return { enabled: true, engine_path: null, model_loaded: true, target_labels: ["cat"], latest_available: true, last_result: structuredClone(visionCapture), last_error: null }
   }

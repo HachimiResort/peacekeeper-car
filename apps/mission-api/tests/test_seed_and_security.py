@@ -47,11 +47,11 @@ async def test_cars_yaml_only_inserts_missing_robot(tmp_path: Path, monkeypatch)
     assert session.commits == 1
 
 
-def _request(token: str = "") -> Request:
+def _request(token: str = "", *, method: str = "GET", query_string: bytes = b"") -> Request:
     headers = []
     if token:
         headers.append((b"x-peacekeeper-token", token.encode("ascii")))
-    return Request({"type": "http", "method": "GET", "path": "/api/robots", "headers": headers})
+    return Request({"type": "http", "method": method, "path": "/api/robots", "query_string": query_string, "headers": headers})
 
 
 def test_shared_token_accepts_exact_value_and_rejects_missing():
@@ -59,5 +59,14 @@ def test_shared_token_accepts_exact_value_and_rejects_missing():
 
     with pytest.raises(ApiError) as caught:
         verify_http_token(_request(), "secret-token")
+
+    assert caught.value.status_code == 401
+
+
+def test_shared_token_allows_query_token_for_get_only():
+    verify_http_token(_request(query_string=b"token=secret-token"), "secret-token")
+
+    with pytest.raises(ApiError) as caught:
+        verify_http_token(_request(method="POST", query_string=b"token=secret-token"), "secret-token")
 
     assert caught.value.status_code == 401

@@ -143,6 +143,7 @@ export interface MissionApi {
   liveMapStatus(robotId: string): Promise<LiveMapStatus>
   liveMapPreview(robotId: string): Promise<Blob>
   videoSample(robotId: string): Promise<Blob>
+  videoStreamUrl(robotId: string): string
   visionStatus(robotId: string): Promise<VisionStatus>
   visionCapture(robotId: string): Promise<VisionCapture>
   visionLatest(robotId: string): Promise<VisionCapture>

@@ -23,4 +23,9 @@ describe("Mission API client", () => {
     expect(reconnectDelay(4)).toBe(15000)
     expect(reconnectDelay(20)).toBe(15000)
   })
+
+  it("builds video stream url with query token", () => {
+    const api = new HttpMissionApi("valid-token")
+    expect(api.videoStreamUrl("car_1")).toBe("/api/robots/car_1/video/stream.mjpg?token=valid-token")
+  })
 })

@@ -106,6 +106,31 @@ async def test_agent_client_reads_video_sample_as_bytes():
 
 
 @pytest.mark.asyncio
+async def test_agent_client_opens_video_stream():
+    async def handler(request: httpx.Request):
+        assert request.url.path == "/video.mjpg"
+        return httpx.Response(
+            200,
+            content=b"--frame\r\nContent-Type: image/jpeg\r\n\r\n",
+            headers={"content-type": "multipart/x-mixed-replace; boundary=frame"},
+        )
+
+    client = FleetAgentClient("test-token", 2, 5, 120)
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        headers={"X-Peacekeeper-Token": "test-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    robot = Robot(id="car_1", name="Car 1", base_url="http://car-1", capabilities={})
+
+    response = await client.open_video_stream(robot)
+
+    assert response.headers["content-type"].startswith("multipart/x-mixed-replace")
+    await response.aclose()
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_agent_client_captures_and_reads_vision_results():
     async def handler(request: httpx.Request):
         if request.url.path == "/api/vision/capture":
