@@ -164,6 +164,23 @@ export interface VehicleSavedMap {
   size_bytes: number
 }
 
+export interface AudioAsset {
+  name: string
+  bytes: number
+}
+
+export interface AudioStatus {
+  enabled: boolean
+  available: boolean
+  playing: boolean
+  asset: string | null
+  pid: number | null
+  loop: boolean
+  volume: number
+  started_at: number | null
+  last_error: string | null
+}
+
 export interface MissionApi {
   health(): Promise<boolean>
   overview(): Promise<Overview>
@@ -177,6 +194,9 @@ export interface MissionApi {
   navigationGoal(id: string, pose: NavigationPose): Promise<JsonObject>
   navigationCancel(id: string): Promise<JsonObject>
   navigationStop(id: string): Promise<JsonObject>
+  audioAssets(robotId: string): Promise<AudioAsset[]>
+  audioStatus(robotId: string): Promise<AudioStatus>
+  uploadAudio(robotId: string, file: File): Promise<JsonObject>
   fleetStop(): Promise<JsonObject>
   maps(): Promise<StoredMap[]>
   map(id: string): Promise<StoredMap>

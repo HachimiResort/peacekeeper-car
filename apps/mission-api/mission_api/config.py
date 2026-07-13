@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     offline_failures: int = Field(default=3, ge=1, le=20)
     last_seen_flush_s: float = Field(default=30.0, ge=5.0, le=300.0)
     max_map_bytes: int = Field(default=64 * 1024 * 1024, ge=1024 * 1024)
+    max_audio_bytes: int = Field(default=32 * 1024 * 1024, ge=1024 * 1024)
     max_evidence_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
     max_poll_concurrency: int = Field(default=20, ge=1, le=200)
 

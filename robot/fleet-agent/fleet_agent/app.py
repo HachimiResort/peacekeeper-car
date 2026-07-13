@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from .command_arbiter import CommandArbiter
+from .audio import AudioService
 from .config import AgentConfig
 from .hazard import EventOutbox, EvidenceStore, HazardSupervisor
 from .mapping import MappingService
@@ -23,7 +24,7 @@ from .process_manager import ProcessManager
 from .range_estimation import TargetRangeEstimator
 from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from .rosmaster_control import RosmasterController
-from .schemas import CmdVelRequest, LightControlRequest, HazardHoldRequest, HazardMonitorRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
+from .schemas import AudioPlayRequest, BuzzerControlRequest, CmdVelRequest, LightControlRequest, HazardHoldRequest, HazardMonitorRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
 from .video import VideoService
 from .vision import VisionCaptureService, VisionService, VisionUnavailable, VisionWorkerClient
@@ -49,6 +50,7 @@ def create_app(config: AgentConfig) -> FastAPI:
     (data_dir / "evidence").mkdir(parents=True, exist_ok=True)
 
     rosmaster = RosmasterController(config.control, config.safety)
+    audio = AudioService(config.audio, data_dir)
     direct_odom = DirectOdomPublisher(
         config.ros.odom_topic,
         config.ros.odom_frame,
@@ -163,6 +165,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             cmd_vel.shutdown()
             range_estimator.shutdown()
             video.stop()
+            audio.shutdown()
             process_manager.stop_all()
 
     app = FastAPI(
@@ -208,6 +211,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             },
             "process_details": process_status,
             "video": video.status(),
+            "audio": audio.status(),
             "vision": vision_capture.status(),
             "navigation": navigation.status(),
             "patrol": patrol.status(),
@@ -495,6 +499,63 @@ def create_app(config: AgentConfig) -> FastAPI:
                 payload.duration_ms,
             )
             return {"ok": True, **result}
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)
+
+    @app.post("/api/control/buzzer")
+    async def control_buzzer(payload: BuzzerControlRequest):
+        try:
+            result = await _run_blocking(
+                rosmaster.control_buzzer,
+                payload.enabled,
+                payload.duration_ms,
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)
+
+    @app.get("/api/audio/assets")
+    async def audio_assets():
+        return JSONResponse(await _run_blocking(audio.assets))
+
+    @app.get("/api/audio/status")
+    async def audio_status():
+        return JSONResponse(await _run_blocking(audio.status))
+
+    @app.post("/api/audio/install")
+    async def audio_install(bundle: UploadFile = File(...)):
+        filename = bundle.filename or ""
+        payload = await bundle.read(config.audio.max_asset_bytes + 1)
+        if len(payload) > config.audio.max_asset_bytes:
+            return JSONResponse({"ok": False, "message": "Audio asset exceeds configured size limit"}, status_code=413)
+        try:
+            return JSONResponse(await _run_blocking(audio.install, filename, payload))
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+        except OSError as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)
+
+    @app.post("/api/audio/play")
+    async def audio_play(payload: AudioPlayRequest):
+        try:
+            return JSONResponse(await _run_blocking(audio.play, payload.asset, payload.loop, payload.volume))
+        except FileNotFoundError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)
+
+    @app.post("/api/audio/stop")
+    async def audio_stop():
+        try:
+            return JSONResponse(await _run_blocking(audio.stop))
         except Exception as exc:
             state.set_error(str(exc))
             return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)

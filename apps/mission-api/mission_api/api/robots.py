@@ -1,6 +1,6 @@
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,9 @@ from ..errors import ApiError
 from ..models import Robot
 from ..repositories import MissionRepository, RobotRepository
 from ..schemas import (
+    AudioPlayCommand,
+    BuzzerControlCommand,
+    LightControlCommand,
     ManualCommand,
     MapNameRequest,
     MapSaveRequest,
@@ -136,6 +139,85 @@ async def estop(robot_id: str, request: Request, session: AsyncSession = Depends
 @router.post("/{robot_id}/control/clear-estop")
 async def clear_estop(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
     return await _proxy(request, session, robot_id, "/api/system/clear_estop")
+
+
+@router.post("/{robot_id}/control/lights")
+async def control_lights(
+    robot_id: str,
+    payload: LightControlCommand,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    return await _proxy(request, session, robot_id, "/api/control/lights", payload.model_dump())
+
+
+@router.post("/{robot_id}/control/buzzer")
+async def control_buzzer(
+    robot_id: str,
+    payload: BuzzerControlCommand,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    return await _proxy(request, session, robot_id, "/api/control/buzzer", payload.model_dump())
+
+
+@router.get("/{robot_id}/audio/assets")
+async def audio_assets(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    return await request.app.state.agent_client.request(robot, "GET", "/api/audio/assets")
+
+
+@router.get("/{robot_id}/audio/status")
+async def audio_status(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    return await request.app.state.agent_client.request(robot, "GET", "/api/audio/status")
+
+
+@router.post("/{robot_id}/audio/upload")
+async def audio_upload(
+    robot_id: str,
+    request: Request,
+    bundle: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    payload = await bundle.read(request.app.state.settings.max_audio_bytes + 1)
+    if len(payload) > request.app.state.settings.max_audio_bytes:
+        raise ApiError(413, "audio_too_large", "Audio asset exceeds configured size limit")
+    mission = await MissionRepository.create(
+        session,
+        "audio_upload",
+        robot.id,
+        {"filename": bundle.filename, "bytes": len(payload)},
+    )
+    try:
+        result = await request.app.state.agent_client.install_audio(robot, bundle.filename or "", payload)
+        await MissionRepository.finish(session, mission, result)
+        return {"mission_id": str(mission.id), "result": result}
+    except Exception as exc:
+        await MissionRepository.fail(session, mission, str(exc))
+        raise
+
+
+@router.post("/{robot_id}/audio/play")
+async def audio_play(
+    robot_id: str,
+    payload: AudioPlayCommand,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    return await _proxy(request, session, robot_id, "/api/audio/play", payload.model_dump())
+
+
+@router.post("/{robot_id}/audio/stop")
+async def audio_stop(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, "/api/audio/stop")
 
 
 @router.post("/{robot_id}/mapping/start")

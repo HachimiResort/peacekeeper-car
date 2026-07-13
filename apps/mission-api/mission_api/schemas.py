@@ -47,6 +47,24 @@ class ManualCommand(BaseModel):
     source: str = "mission-api"
 
 
+class LightControlCommand(BaseModel):
+    left: bool = True
+    right: bool = True
+    # This is a firmware byte, so the car endpoint only accepts 0..255.
+    duration_ms: int = Field(default=0, ge=0, le=255)
+
+
+class BuzzerControlCommand(BaseModel):
+    enabled: bool = True
+    duration_ms: int = Field(default=0, ge=0, le=60000)
+
+
+class AudioPlayCommand(BaseModel):
+    asset: str = Field(min_length=1, max_length=128)
+    loop: bool = False
+    volume: int = Field(default=100, ge=0, le=100)
+
+
 class VisionBoundingBox(BaseModel):
     x: float
     y: float

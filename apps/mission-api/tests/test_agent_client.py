@@ -27,6 +27,29 @@ async def test_agent_client_attaches_token_and_normalizes_success():
 
 
 @pytest.mark.asyncio
+async def test_agent_client_installs_audio_as_a_multipart_asset():
+    async def handler(request: httpx.Request):
+        assert request.url.path == "/api/audio/install"
+        assert request.headers["X-Peacekeeper-Token"] == "test-token"
+        assert b'filename="arrival.mp3"' in request.content
+        assert b"audio-bytes" in request.content
+        return httpx.Response(200, json={"ok": True, "asset": {"name": "arrival.mp3", "bytes": 11}})
+
+    client = FleetAgentClient("test-token", 2, 5, 120)
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        headers={"X-Peacekeeper-Token": "test-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    robot = Robot(id="car_1", name="Car 1", base_url="http://car-1", capabilities={})
+
+    result = await client.install_audio(robot, "arrival.mp3", b"audio-bytes")
+
+    assert result["asset"]["name"] == "arrival.mp3"
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_agent_client_converts_timeout_to_domain_error():
     async def handler(request: httpx.Request):
         raise httpx.ReadTimeout("slow", request=request)

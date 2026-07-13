@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover - depends on optional local test deps
 import fleet_agent.patrol as patrol_module
 
 from fleet_agent.command_arbiter import CommandArbiter
+from fleet_agent.audio import AudioService
 from fleet_agent.config import AgentConfig, PatrolConfig, ProcessConfig, SafetyConfig, VisionConfig, _to_dict, load_config
 from fleet_agent.mapping import MappingService
 from fleet_agent.map_bundle import install_map_bundle
@@ -113,6 +114,7 @@ class FakeMotionController:
     def __init__(self):
         self.published = []
         self.light_commands = []
+        self.buzzer_commands = []
         self.stop_count = 0
         self.shutdown_count = 0
 
@@ -125,6 +127,11 @@ class FakeMotionController:
     def control_lights(self, left, right, duration_ms):
         command = {"left": left, "right": right, "duration_ms": duration_ms}
         self.light_commands.append(command)
+        return command
+
+    def control_buzzer(self, enabled, duration_ms):
+        command = {"enabled": enabled, "duration_ms": duration_ms, "remaining_ms": duration_ms}
+        self.buzzer_commands.append(command)
         return command
 
     def shutdown(self):
@@ -377,6 +384,7 @@ class FakeRangeEstimator:
 
 def tracking_config():
     config = AgentConfig()
+    config.data_dir = tempfile.mkdtemp(prefix="peacekeeper-fleet-agent-test-")
     config.processes = {
         "lidar": ProcessConfig(name="lidar", command="lidar"),
         "laser_tracker": ProcessConfig(name="laser_tracker", command="laser_tracker"),
@@ -1342,6 +1350,84 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(fake.ser.flush_count, 2)
         controller.shutdown()
 
+    def test_rosmaster_buzzer_auto_silences_after_requested_duration(self):
+        class FakeBot:
+            def __init__(self):
+                self.calls = []
+
+            def set_car_run(self, state, speed):
+                del state, speed
+
+            def set_car_motion(self, x, y, z):
+                del x, y, z
+
+            def set_motor(self, a, b, c, d):
+                del a, b, c, d
+
+            def set_beep(self, value):
+                self.calls.append(value)
+
+        fake = FakeBot()
+        controller = RosmasterController(
+            AgentConfig().control,
+            AgentConfig().safety,
+            bot_factory=lambda: fake,
+        )
+
+        result = controller.control_buzzer(True, duration_ms=30)
+        self.assertTrue(result["enabled"])
+        self.assertGreater(result["remaining_ms"], 0)
+        self.assertIn(1, fake.calls)
+
+        time.sleep(0.08)
+        self.assertFalse(controller.status()["buzzer"]["enabled"])
+        self.assertEqual(fake.calls[-1], 0)
+        controller.shutdown()
+
+    def test_audio_service_only_plays_safe_assets_and_stops_its_process_group(self):
+        class FakeStderr:
+            def close(self):
+                return None
+
+        class FakeProcess:
+            pid = 12345
+            returncode = None
+            stderr = FakeStderr()
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout):
+                del timeout
+                self.returncode = 0
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "song.mp3").write_bytes(b"audio")
+            config = AgentConfig().audio
+            config.asset_dir = temp_dir
+            config.player_command = sys.executable
+            service = AudioService(config, root)
+            process = FakeProcess()
+            with patch("fleet_agent.audio.subprocess.Popen", return_value=process) as popen, \
+                    patch("fleet_agent.audio.os.killpg") as killpg:
+                result = service.play("song.mp3", loop=True, volume=65)
+                self.assertTrue(result["playing"])
+                self.assertEqual(popen.call_args.args[0], [
+                    sys.executable, "-nodisp", "-autoexit", "-loglevel", "error", "-volume", "65", "-loop", "0", str(root / "song.mp3"),
+                ])
+                service.stop()
+                killpg.assert_called_once()
+
+            with self.assertRaises(ValueError):
+                service.play("../outside.mp3")
+
+            installed = service.install("cue.ogg", b"new-audio")
+            self.assertEqual(installed["asset"], {"name": "cue.ogg", "bytes": 9})
+            self.assertEqual((root / "cue.ogg").read_bytes(), b"new-audio")
+            with self.assertRaises(ValueError):
+                service.install("../outside.mp3", b"audio")
+
     def test_rosmaster_backend_exposes_motion_feedback(self):
         class FakeBot:
             def __init__(self):
@@ -1510,6 +1596,58 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "left": True, "right": False, "duration_ms": 100})
         self.assertEqual(fake_controller.light_commands, [{"left": True, "right": False, "duration_ms": 100}])
+
+    @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
+    def test_buzzer_api_uses_the_rosmaster_controller(self):
+        config = tracking_config()
+        fake_pm = FakeManagedProcessManager(config)
+        fake_controller = FakeMotionController()
+        fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
+        with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
+                patch.object(app_module, "RosmasterController", return_value=fake_controller), \
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
+            app = app_module.create_app(config)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/control/buzzer",
+                    json={"enabled": True, "duration_ms": 250},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "enabled": True, "duration_ms": 250, "remaining_ms": 250})
+        self.assertEqual(fake_controller.buzzer_commands, [{"enabled": True, "duration_ms": 250, "remaining_ms": 250}])
+
+    @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
+    def test_audio_api_lists_safe_assets_and_rejects_missing_assets(self):
+        config = tracking_config()
+        audio_dir = Path(config.data_dir) / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        (audio_dir / "cue.mp3").write_bytes(b"audio")
+        fake_pm = FakeManagedProcessManager(config)
+        fake_controller = FakeMotionController()
+        fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
+        with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
+                patch.object(app_module, "RosmasterController", return_value=fake_controller), \
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
+            app = app_module.create_app(config)
+            with TestClient(app) as client:
+                assets = client.get("/api/audio/assets")
+                installed = client.post("/api/audio/install", files={"bundle": ("arrival.wav", b"new-audio", "audio/wav")})
+                missing = client.post("/api/audio/play", json={"asset": "missing.mp3"})
+
+        self.assertEqual(assets.status_code, 200)
+        self.assertEqual(assets.json()["assets"], [{"name": "cue.mp3", "bytes": 5}])
+        self.assertEqual(installed.status_code, 200)
+        self.assertEqual(installed.json()["asset"], {"name": "arrival.wav", "bytes": 9})
+        self.assertEqual(missing.status_code, 404)
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_api_requires_shared_token_when_enabled(self):

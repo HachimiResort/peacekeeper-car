@@ -34,6 +34,10 @@ class RosmasterController:
         self.feedback_thread_started = False
         self.last_publish_ok = False
         self.last_light_command = {"left": False, "right": False, "duration_ms": 0}
+        self.last_buzzer_command = {"enabled": False, "duration_ms": 0}
+        self._buzzer_timer: Optional[threading.Timer] = None
+        self._buzzer_deadline: Optional[float] = None
+        self._buzzer_generation = 0
         self._stop_event = threading.Event()
         self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True)
         self._watchdog.start()
@@ -125,6 +129,35 @@ class RosmasterController:
             "frames": [frame.hex().upper() for frame in frames],
         }
 
+    def control_buzzer(self, enabled: bool, duration_ms: int = 0) -> dict:
+        """Set the onboard buzzer through Rosmaster_Lib's shared serial link.
+
+        Rosmaster_Lib versions do not consistently expose the firmware's
+        timed-beep argument.  The agent therefore sends an explicit on/off
+        command and owns the optional auto-silence timer.
+        """
+        duration = int(duration_ms)
+        if not 0 <= duration <= 60000:
+            raise ValueError("duration_ms must be between 0 and 60000")
+
+        self.start()
+        with self.lock:
+            self._cancel_buzzer_timer_unlocked()
+            active = bool(enabled)
+            self._set_beep_unlocked(active)
+            self.last_buzzer_command = {
+                "enabled": active,
+                "duration_ms": duration if active else 0,
+            }
+            if active and duration:
+                generation = self._buzzer_generation
+                self._buzzer_deadline = time.monotonic() + duration / 1000.0
+                timer = threading.Timer(duration / 1000.0, self._auto_silence_buzzer, args=(generation,))
+                timer.daemon = True
+                self._buzzer_timer = timer
+                timer.start()
+            return self._buzzer_status_unlocked()
+
     def shutdown(self) -> None:
         self._stop_event.set()
         try:
@@ -155,6 +188,8 @@ class RosmasterController:
                 raise
 
     def status(self) -> dict:
+        with self.lock:
+            buzzer = self._buzzer_status_unlocked()
         return {
             "available": self.bot is not None,
             "publisher_ready": self.bot is not None,
@@ -171,6 +206,7 @@ class RosmasterController:
             "last_feedback": dict(self.last_feedback),
             "last_feedback_error": self.last_feedback_error,
             "last_light_command": dict(self.last_light_command),
+            "buzzer": buzzer,
             "ttl_active": self.deadline is not None and time.monotonic() < self.deadline,
             "port": self.control.rosmaster_port,
             "motion_mode": self.control.direct_motion_mode,
@@ -195,12 +231,51 @@ class RosmasterController:
             lambda: self.bot.set_car_run(0, 0),
             lambda: self.bot.set_car_motion(0, 0, 0),
             lambda: self.bot.set_motor(0, 0, 0, 0),
-            lambda: self.bot.set_beep(0),
         ):
             try:
                 func()
             except Exception:
                 pass
+        self._cancel_buzzer_timer_unlocked()
+        try:
+            self._set_beep_unlocked(False)
+        except Exception:
+            pass
+        self.last_buzzer_command = {"enabled": False, "duration_ms": 0}
+
+    def _set_beep_unlocked(self, enabled: bool) -> None:
+        set_beep = getattr(self.bot, "set_beep", None)
+        if not callable(set_beep):
+            raise RuntimeError("Rosmaster_Lib buzzer control is not available")
+        set_beep(1 if enabled else 0)
+
+    def _cancel_buzzer_timer_unlocked(self) -> None:
+        self._buzzer_generation += 1
+        if self._buzzer_timer is not None:
+            self._buzzer_timer.cancel()
+        self._buzzer_timer = None
+        self._buzzer_deadline = None
+
+    def _auto_silence_buzzer(self, generation: int) -> None:
+        with self.lock:
+            if generation != self._buzzer_generation:
+                return
+            self._buzzer_timer = None
+            self._buzzer_deadline = None
+            try:
+                self._set_beep_unlocked(False)
+            except Exception:
+                pass
+            self.last_buzzer_command = {"enabled": False, "duration_ms": 0}
+
+    def _buzzer_status_unlocked(self) -> dict:
+        remaining_ms = 0
+        if self._buzzer_deadline is not None:
+            remaining_ms = max(0, int((self._buzzer_deadline - time.monotonic()) * 1000))
+        return {
+            **self.last_buzzer_command,
+            "remaining_ms": remaining_ms,
+        }
 
     def _state_from_twist(self, linear_x: float, linear_y: float, angular_z: float) -> int:
         values = {

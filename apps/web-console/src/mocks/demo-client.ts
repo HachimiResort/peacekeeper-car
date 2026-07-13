@@ -1,4 +1,4 @@
-import type { AlertRecord, HazardStatus, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StatusSubscriptionObserver, StoredMap, VehicleSavedMap, VisionCapture, VisionStatus } from "../api/types"
+import type { AlertRecord, AudioAsset, AudioStatus, HazardStatus, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StatusSubscriptionObserver, StoredMap, VehicleSavedMap, VisionCapture, VisionStatus } from "../api/types"
 
 const now = new Date()
 const iso = (minutes = 0) => new Date(now.getTime() - minutes * 60_000).toISOString()
@@ -7,12 +7,12 @@ const robots: Robot[] = [
   {
     id: "car_1", name: "苍松一号", base_url: "http://10.60.162.192:8001", role: "leader", enabled: true,
     capabilities: { mapping: true, navigation: true, patrol: true }, last_seen: iso(), online: true,
-    runtime_status: { mode: "IDLE", processes: { lidar: "running", slam: "stopped", nav2: "running" }, navigation: { ready: true, action_state: "running", current_map: "forest_lab__v3", active_goal_id: null }, patrol: { state: "idle", current_index: 0, total_points: 0 }, ros: { last_speed: 25, publisher_ready: true } },
+    runtime_status: { mode: "IDLE", processes: { lidar: "running", slam: "stopped", nav2: "running" }, navigation: { ready: true, action_state: "running", current_map: "forest_lab__v3", active_goal_id: null }, patrol: { state: "idle", current_index: 0, total_points: 0 }, ros: { last_speed: 25, publisher_ready: true, lights: { left: false, right: false }, buzzer: { enabled: false } }, audio: { enabled: true, available: true, playing: false, asset: null, pid: null, loop: false, volume: 80, started_at: null, last_error: null } },
   },
   {
     id: "car_2", name: "云杉二号", base_url: "http://10.60.162.193:8001", role: "wing", enabled: true,
     capabilities: { mapping: true, navigation: true, patrol: true }, last_seen: iso(2), online: true,
-    runtime_status: { mode: "IDLE", processes: { lidar: "running", slam: "stopped", nav2: "running" }, navigation: { ready: true, action_state: "running", current_map: "forest_lab__v3", active_goal_id: null }, patrol: { state: "idle" }, ros: { last_speed: 20, publisher_ready: true } },
+    runtime_status: { mode: "IDLE", processes: { lidar: "running", slam: "stopped", nav2: "running" }, navigation: { ready: true, action_state: "running", current_map: "forest_lab__v3", active_goal_id: null }, patrol: { state: "idle" }, ros: { last_speed: 20, publisher_ready: true, lights: { left: false, right: false }, buzzer: { enabled: false } }, audio: { enabled: true, available: true, playing: false, asset: null, pid: null, loop: false, volume: 80, started_at: null, last_error: null } },
   },
   {
     id: "car_3", name: "冷杉三号", base_url: "http://10.60.162.194:8001", role: "reserve", enabled: true,
@@ -44,6 +44,8 @@ const deployments: MapDeployment[] = [
   { id: "dep-1", map_id: "map-forest-v3", robot_id: "car_1", state: "installed", installed_name: "forest_lab__v3", error: null, created_at: iso(80), started_at: iso(80), finished_at: iso(79), map: { id: "map-forest-v3", logical_name: "forest_lab", version: 3 }, robot: { id: "car_1", name: "苍松一号" } },
   { id: "dep-2", map_id: "map-forest-v3", robot_id: "car_2", state: "installed", installed_name: "forest_lab__v3", error: null, created_at: iso(80), started_at: iso(80), finished_at: iso(78), map: { id: "map-forest-v3", logical_name: "forest_lab", version: 3 }, robot: { id: "car_2", name: "云杉二号" } },
 ]
+
+const audioAssets: AudioAsset[] = [{ name: "forest-call.mp3", bytes: 1_284_000 }, { name: "alert-tone.wav", bytes: 182_000 }]
 
 const visionCapture: VisionCapture = {
   ok: true,
@@ -94,6 +96,18 @@ export class DemoMissionApi implements MissionApi {
     if (path === "control/estop") status.mode = "EMERGENCY_STOP"
     if (path === "control/clear-estop") status.mode = "IDLE"
     if (path === "control/stop") status.mode = "IDLE"
+    if (path === "control/lights") {
+      status.ros = { ...(status.ros as JsonObject), lights: { left: Boolean(payload.left), right: Boolean(payload.right) } }
+    }
+    if (path === "control/buzzer") {
+      status.ros = { ...(status.ros as JsonObject), buzzer: { enabled: Boolean(payload.enabled), duration_ms: Number(payload.duration_ms || 0) } }
+    }
+    if (path === "audio/play") {
+      status.audio = { enabled: true, available: true, playing: true, asset: String(payload.asset), pid: 4242, loop: Boolean(payload.loop), volume: Number(payload.volume), started_at: Date.now() / 1000, last_error: null }
+    }
+    if (path === "audio/stop") {
+      status.audio = { ...(status.audio as JsonObject), enabled: true, available: true, playing: false, asset: null, pid: null, started_at: null, last_error: null }
+    }
     if (path === "mapping/start") status.mode = "MAPPING"
     if (path === "mapping/stop") status.mode = "IDLE"
     if (path === "navigation/start") status.navigation = { ready: true, current_map: payload.map_name, action_state: "running", active_goal_id: null }
@@ -131,6 +145,18 @@ export class DemoMissionApi implements MissionApi {
   }
   async navigationCancel(id: string) { return this.robotAction(id, "navigation/cancel") }
   async navigationStop(id: string) { return this.robotAction(id, "navigation/stop") }
+  async audioAssets(_robotId: string): Promise<AudioAsset[]> { return structuredClone(audioAssets) }
+  async audioStatus(robotId: string): Promise<AudioStatus> {
+    const status = robots.find((item) => item.id === robotId)?.runtime_status?.audio
+    return structuredClone((status || { enabled: true, available: true, playing: false, asset: null, pid: null, loop: false, volume: 80, started_at: null, last_error: null }) as AudioStatus)
+  }
+  async uploadAudio(_robotId: string, file: File) {
+    const name = file.name
+    const current = audioAssets.find((asset) => asset.name === name)
+    if (current) current.bytes = file.size
+    else audioAssets.push({ name, bytes: file.size })
+    return { ok: true, demo: true, result: { asset: { name, bytes: file.size } } }
+  }
   async fleetStop() { robots.forEach((robot) => { if (robot.runtime_status) robot.runtime_status.mode = "IDLE" }); return { ok: true, demo: true } }
   async maps() { return structuredClone(maps) }
   async map(id: string) { const value = maps.find((item) => item.id === id); if (!value) throw new Error("地图不存在"); return structuredClone(value) }

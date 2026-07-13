@@ -98,6 +98,18 @@ class ControlConfig:
 
 
 @dataclass
+class AudioConfig:
+    """Local audio playback for demonstrations and operator announcements."""
+
+    enabled: bool = True
+    player_command: str = "ffplay"
+    # An empty value resolves to <data_dir>/audio so the API never accepts
+    # arbitrary host paths as playable assets.
+    asset_dir: str = ""
+    max_asset_bytes: int = 64 * 1024 * 1024
+
+
+@dataclass
 class ProcessConfig:
     name: str
     command: str
@@ -139,6 +151,7 @@ class AgentConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     hazards: HazardConfig = field(default_factory=HazardConfig)
     control: ControlConfig = field(default_factory=ControlConfig)
+    audio: AudioConfig = field(default_factory=AudioConfig)
     processes: Dict[str, ProcessConfig] = field(
         default_factory=lambda: {
             "lidar": ProcessConfig(
@@ -182,6 +195,7 @@ def _to_dict(config: AgentConfig) -> dict:
         "vision": vars(config.vision),
         "hazards": vars(config.hazards),
         "control": vars(config.control),
+        "audio": vars(config.audio),
         "processes": {key: vars(value) for key, value in config.processes.items()},
         "mapping": vars(config.mapping),
         "patrol": vars(config.patrol),
@@ -209,6 +223,7 @@ def _from_dict(raw: dict) -> AgentConfig:
         vision=VisionConfig(**raw.get("vision", {})),
         hazards=HazardConfig(**raw.get("hazards", {})),
         control=ControlConfig(**raw.get("control", {})),
+        audio=AudioConfig(**raw.get("audio", {})),
         processes=processes or AgentConfig().processes,
         mapping=MappingConfig(**raw.get("mapping", {})),
         patrol=PatrolConfig(**raw.get("patrol", {})),

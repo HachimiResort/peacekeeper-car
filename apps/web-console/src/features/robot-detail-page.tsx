@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertOctagon, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Ban, ChevronDown, ChevronUp, Crosshair, MapPinned, Pause, Play, RotateCcw, Save, Square, Trash2, Waypoints, X } from "lucide-react"
+import { AlertOctagon, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Ban, BellRing, ChevronDown, ChevronUp, Crosshair, Lightbulb, LightbulbOff, MapPinned, Music2, Pause, Play, RotateCcw, Save, Square, Trash2, Upload, Volume2, Waypoints, X } from "lucide-react"
 import { Link, useParams } from "react-router-dom"
 import { useFeedback } from "../app/feedback"
 import { useLiveStatus } from "../app/live-status"
@@ -7,7 +7,7 @@ import { useSession } from "../app/session"
 import { useAsyncAction } from "../app/use-async-action"
 import { degreesToRadians } from "../api/client"
 import { MotionCommander } from "../api/motion"
-import type { MapDeployment, MapPoint, Robot, StoredMap } from "../api/types"
+import type { AudioAsset, AudioStatus, MapDeployment, MapPoint, Robot, StoredMap } from "../api/types"
 import { CameraPreview } from "../components/camera-preview"
 import { LiveMapPreview } from "../components/live-map-preview"
 import { HazardPanel } from "../components/hazard-panel"
@@ -16,7 +16,7 @@ import { VisionDetectionCard } from "../components/vision-detection-card"
 import { Badge, Button, Card, EmptyState, InlineActionStatus, JsonPanel, LoadingBlock, PageHeader, StatusDot, fieldClass } from "../components/ui"
 
 type Direction = "forward" | "backward" | "left" | "right"
-type PanelName = "control" | "mapping" | "navigation" | "patrol"
+type PanelName = "control" | "effects" | "mapping" | "navigation" | "patrol"
 type PanelState = { tone: "info" | "success" | "error" | "warning"; title: string; detail?: string }
 
 const motion: Record<Direction, { linear_x: number; angular_z: number }> = {
@@ -29,6 +29,11 @@ const motion: Record<Direction, { linear_x: number; angular_z: number }> = {
 const labels: Record<string, { pending: string; success: string; panel: PanelName }> = {
   "control/estop": { pending: "正在急停", success: "急停指令已下发", panel: "control" },
   "control/clear-estop": { pending: "正在解除", success: "解除急停指令已下发", panel: "control" },
+  "control/lights": { pending: "正在设置前灯", success: "前灯指令已下发", panel: "effects" },
+  "control/buzzer": { pending: "正在控制蜂鸣器", success: "蜂鸣器指令已下发", panel: "effects" },
+  "audio/play": { pending: "正在播放音频", success: "音频播放指令已下发", panel: "effects" },
+  "audio/stop": { pending: "正在停止音频", success: "停止音频指令已下发", panel: "effects" },
+  "audio/upload": { pending: "正在分发音频", success: "音频已安装到本车", panel: "effects" },
   "mapping/start": { pending: "正在启动", success: "建图指令已下发", panel: "mapping" },
   "mapping/stop": { pending: "正在停止", success: "停止 SLAM 指令已下发", panel: "mapping" },
   "mapping/save": { pending: "正在保存", success: "地图已保存并导入中心", panel: "mapping" },
@@ -55,6 +60,9 @@ export function RobotDetailPage() {
   const [loadError, setLoadError] = useState("")
   const [maps, setMaps] = useState<StoredMap[]>([])
   const [deployments, setDeployments] = useState<MapDeployment[]>([])
+  const [audioAssets, setAudioAssets] = useState<AudioAsset[]>([])
+  const [audioStatus, setAudioStatus] = useState<AudioStatus | null>(null)
+  const [audioFile, setAudioFile] = useState<File | null>(null)
   const [selectedDeployment, setSelectedDeployment] = useState("")
   const [selectedPoint, setSelectedPoint] = useState<MapPoint | null>(null)
   const [patrolPoints, setPatrolPoints] = useState<MapPoint[]>([])
@@ -62,6 +70,10 @@ export function RobotDetailPage() {
   const [dwell, setDwell] = useState(1)
   const [loop, setLoop] = useState(false)
   const [speed, setSpeed] = useState(0.2)
+  const [buzzerDuration, setBuzzerDuration] = useState("300")
+  const [selectedAudio, setSelectedAudio] = useState("")
+  const [audioVolume, setAudioVolume] = useState(80)
+  const [audioLoop, setAudioLoop] = useState(false)
   const [mapName, setMapName] = useState("forest_map")
   const [activeDirection, setActiveDirection] = useState<Direction | null>(null)
   const [cameraActive, setCameraActive] = useState(false)
@@ -72,9 +84,16 @@ export function RobotDetailPage() {
   const load = useCallback(async () => {
     if (!api) return
     try {
-      const [nextRobot, nextMaps, nextDeployments] = await Promise.all([api.robot(robotId), api.maps(), api.deployments({ robot_id: robotId, state: "installed", limit: "200" })])
-      setRobot(nextRobot); setMaps(nextMaps); setDeployments(nextDeployments.items); setLoadError("")
+      const [nextRobot, nextMaps, nextDeployments, nextAudioAssets, nextAudioStatus] = await Promise.all([
+        api.robot(robotId),
+        api.maps(),
+        api.deployments({ robot_id: robotId, state: "installed", limit: "200" }),
+        api.audioAssets(robotId).catch(() => []),
+        api.audioStatus(robotId).catch(() => null),
+      ])
+      setRobot(nextRobot); setMaps(nextMaps); setDeployments(nextDeployments.items); setAudioAssets(nextAudioAssets); setAudioStatus(nextAudioStatus); setLoadError("")
       setSelectedDeployment((current) => current || nextDeployments.items[0]?.id || "")
+      setSelectedAudio((current) => current || nextAudioAssets[0]?.name || "")
     } catch (cause) {
       setLoadError(cause instanceof Error ? cause.message : "车辆状态读取失败")
     }
@@ -154,7 +173,7 @@ export function RobotDetailPage() {
 
   const live = statuses[robot.id]
   const currentRobot = live ? { ...robot, online: Boolean(live.online), runtime_status: (live.status as Record<string, unknown>) || robot.runtime_status, last_seen: String(live.last_seen || robot.last_seen || "") || null } : robot
-  const runtime = currentRobot.runtime_status as { mode?: string; processes?: Record<string, string>; navigation?: Record<string, unknown>; patrol?: Record<string, unknown>; video?: { streaming?: boolean; device?: string }; last_error?: string } | null
+  const runtime = currentRobot.runtime_status as { mode?: string; processes?: Record<string, string>; navigation?: Record<string, unknown>; patrol?: Record<string, unknown>; video?: { streaming?: boolean; device?: string }; audio?: AudioStatus; last_error?: string } | null
   const navigation = runtime?.navigation || {}
   const patrol = runtime?.patrol || {}
   const mode = runtime?.mode || "UNKNOWN"
@@ -173,6 +192,10 @@ export function RobotDetailPage() {
   const patrolBusy = ["patrol/start", "patrol/pause", "patrol/resume"].some(actions.isPending)
   const unavailableReason = !currentRobot.enabled ? "车辆已停用" : !currentRobot.online ? "车辆离线" : mode === "EMERGENCY_STOP" ? "车辆处于急停状态" : ""
   const cameraAvailable = currentRobot.enabled && currentRobot.online
+  const effectsAvailable = currentRobot.enabled && currentRobot.online
+  const effectBusy = ["control/lights", "control/buzzer", "audio/play", "audio/stop", "audio/upload"].some(actions.isPending)
+  const currentAudioStatus = audioStatus || runtime?.audio
+  const normalizedBuzzerDuration = Math.min(60_000, Math.max(10, Number(buzzerDuration) || 10))
 
   const confirmThen = async (input: { title: string; description: string; confirmLabel: string; tone?: "primary" | "danger" | "warning" }, callback: () => unknown | Promise<unknown>) => {
     if (await feedback.confirm(input)) await callback()
@@ -183,6 +206,14 @@ export function RobotDetailPage() {
     return { ok: true }
   })
   const addPoint = () => { if (selectedPoint) setPatrolPoints((items) => [...items, selectedPoint]) }
+  const uploadAudio = async () => {
+    if (!audioFile) return
+    const uploaded = await perform("audio/upload", {}, () => api!.uploadAudio(robotId, audioFile))
+    if (uploaded !== undefined) {
+      setSelectedAudio(audioFile.name)
+      setAudioFile(null)
+    }
+  }
   const moveMapPoint = (index: number, point: MapPoint) => {
     if (index < patrolPoints.length) {
       setPatrolPoints((items) => items.map((item, itemIndex) => itemIndex === index ? point : item))
@@ -213,6 +244,26 @@ export function RobotDetailPage() {
         <div className="drive-pad"><span /><DriveButton label="W" icon={<ArrowUp />} active={activeDirection === "forward"} disabled={!controllable} onStart={() => startMotion("forward")} onStop={releaseMotion} /><span /><DriveButton label="A" icon={<ArrowLeft />} active={activeDirection === "left"} disabled={!controllable} onStart={() => startMotion("left")} onStop={releaseMotion} /><Button variant="warning" className="drive-stop" onClick={forceStopMotion}><Square />停止</Button><DriveButton label="D" icon={<ArrowRight />} active={activeDirection === "right"} disabled={!controllable} onStart={() => startMotion("right")} onStop={releaseMotion} /><span /><DriveButton label="S" icon={<ArrowDown />} active={activeDirection === "backward"} disabled={!controllable} onStart={() => startMotion("backward")} onStop={releaseMotion} /><span /></div>
         <div className="safety-actions"><Button variant="danger" loading={actions.isPending("control/estop")} loadingText="正在急停" onClick={() => void perform("control/estop")}><AlertOctagon />急停</Button><Button loading={actions.isPending("control/clear-estop")} loadingText="正在解除" disabled={!currentRobot.online || mode !== "EMERGENCY_STOP"} onClick={() => void confirmThen({ title: "解除急停？", description: "解除后车辆将重新允许运动指令，请确认现场环境安全。", confirmLabel: "确认解除", tone: "warning" }, () => perform("control/clear-estop"))}><RotateCcw />解除急停</Button></div>
         {panelState.control ? <InlineActionStatus {...panelState.control} /> : unavailableReason && <InlineActionStatus tone="warning" title="底盘控制不可用" detail={unavailableReason} />}
+      </Card>
+
+      <Card className="panel effects-panel">
+        <div className="panel-head"><div><h2>声光控制</h2><p>经 Mission API 下发；音频仅可播放车端受控资产</p></div><Music2 /></div>
+        <div className="effect-block">
+          <div className="effect-copy"><strong>前置灯</strong><span>用于调试、提示和表演编排</span></div>
+          <div className="effect-actions light-actions"><Button loading={actions.isPending("control/lights")} loadingText="正在设置" disabled={!effectsAvailable || effectBusy} onClick={() => void perform("control/lights", { left: true, right: false, duration_ms: 0 })}><Lightbulb />仅左灯开</Button><Button disabled={!effectsAvailable || effectBusy} onClick={() => void perform("control/lights", { left: false, right: true, duration_ms: 0 })}><Lightbulb />仅右灯开</Button><Button variant="primary" disabled={!effectsAvailable || effectBusy} onClick={() => void perform("control/lights", { left: true, right: true, duration_ms: 0 })}><Lightbulb />双灯开</Button><Button disabled={!effectsAvailable || effectBusy} onClick={() => void perform("control/lights", { left: false, right: false, duration_ms: 0 })}><LightbulbOff />双灯关</Button></div>
+        </div>
+        <div className="effect-block">
+          <div className="effect-copy"><strong>蜂鸣器</strong><span>单次时长 10 至 60,000 ms</span></div>
+          <div className="effect-actions effect-actions-wide"><label>时长<input className={fieldClass} aria-label="蜂鸣时长 ms" type="number" min="10" max="60000" value={buzzerDuration} disabled={!effectsAvailable} onChange={(event) => setBuzzerDuration(event.target.value)} onBlur={() => setBuzzerDuration(String(normalizedBuzzerDuration))} /></label><Button variant="warning" loading={actions.isPending("control/buzzer")} loadingText="正在蜂鸣" disabled={!effectsAvailable || effectBusy} onClick={() => void perform("control/buzzer", { enabled: true, duration_ms: normalizedBuzzerDuration })}><BellRing />测试蜂鸣</Button><Button disabled={!effectsAvailable || effectBusy} onClick={() => void perform("control/buzzer", { enabled: false, duration_ms: 0 })}><Square />静音</Button></div>
+        </div>
+        <div className="effect-block effect-audio">
+          <div className="effect-copy"><strong>音频播放</strong><span>{currentAudioStatus?.playing ? `正在播放 ${currentAudioStatus.asset || "音频"}` : "选择已部署到车端的音频资产"}</span></div>
+          <div className="audio-upload"><label><span>分发到本车</span><input aria-label="上传音频文件" type="file" accept=".mp3,.wav,.ogg,.m4a,audio/mpeg,audio/wav,audio/ogg,audio/mp4" disabled={!effectsAvailable || effectBusy} onChange={(event) => setAudioFile(event.target.files?.[0] || null)} /></label><Button loading={actions.isPending("audio/upload")} loadingText="正在上传" disabled={!effectsAvailable || !audioFile || effectBusy} onClick={() => void uploadAudio()}><Upload />上传</Button></div>
+          <label>音频资产<select className={fieldClass} aria-label="音频资产" value={selectedAudio} disabled={!effectsAvailable || !audioAssets.length} onChange={(event) => setSelectedAudio(event.target.value)}><option value="">{audioAssets.length ? "选择音频" : "暂无可用资产"}</option>{audioAssets.map((asset) => <option key={asset.name} value={asset.name}>{asset.name} · {formatBytes(asset.bytes)}</option>)}</select></label>
+          <div className="audio-options"><label className="range-field"><span><Volume2 />音量 {audioVolume}%</span><input aria-label="音量" type="range" min="0" max="100" value={audioVolume} disabled={!effectsAvailable} onChange={(event) => setAudioVolume(Number(event.target.value))} /></label><label className="switch-field"><input type="checkbox" checked={audioLoop} disabled={!effectsAvailable} onChange={(event) => setAudioLoop(event.target.checked)} /><span>循环播放</span></label></div>
+          <div className="effect-actions"><Button variant="primary" loading={actions.isPending("audio/play")} loadingText="正在播放" disabled={!effectsAvailable || !selectedAudio || effectBusy} onClick={() => void perform("audio/play", { asset: selectedAudio, volume: audioVolume, loop: audioLoop })}><Play />播放</Button><Button loading={actions.isPending("audio/stop")} loadingText="正在停止" disabled={!effectsAvailable || !currentAudioStatus?.playing || effectBusy} onClick={() => void perform("audio/stop")}><Square />停止音频</Button></div>
+        </div>
+        {panelState.effects ? <InlineActionStatus {...panelState.effects} /> : <InlineActionStatus tone={currentAudioStatus?.last_error ? "warning" : currentAudioStatus?.playing ? "success" : "info"} title={currentAudioStatus?.last_error ? "音频服务报告异常" : currentAudioStatus?.playing ? "音频正在播放" : "等待声光测试"} detail={currentAudioStatus?.last_error || (!audioAssets.length ? "选择文件后点击上传，中心端会将其安装到本车 data/audio。" : effectsAvailable ? "声光控制不会改变底盘运动状态。" : "车辆需在线并启用后才可下发声光指令。")} />}
       </Card>
 
       <Card className="panel mapping-panel">
@@ -258,6 +309,11 @@ export function RobotDetailPage() {
 }
 
 function directionName(direction: Direction) { return direction === "forward" ? "前进" : direction === "backward" ? "后退" : direction === "left" ? "左转" : "右转" }
+
+function formatBytes(value: number) {
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KiB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`
+}
 
 function DriveButton({ label, icon, active, disabled, onStart, onStop }: { label: string; icon: React.ReactNode; active: boolean; disabled: boolean; onStart(): void; onStop(): void }) {
   return <button className={`drive-button${active ? " is-active" : ""}`} disabled={disabled} aria-pressed={active} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); onStart() }} onPointerUp={onStop} onPointerCancel={onStop} onLostPointerCapture={onStop}>{icon}<b>{label}</b></button>

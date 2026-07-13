@@ -1,5 +1,7 @@
 import type {
   AlertRecord,
+  AudioAsset,
+  AudioStatus,
   JsonObject,
   LiveMapStatus,
   MapDeployment,
@@ -54,7 +56,7 @@ export class HttpMissionApi implements MissionApi {
         | { error?: { code?: string; message?: string; details?: unknown }; message?: string }
         | null
       const code = payload?.error?.code || "request_failed"
-      const fallback = response.status >= 500 ? "中心服务暂时不可用" : "操作未完成"
+      const fallback = response.status === 413 ? "上传文件超过服务允许的大小" : response.status >= 500 ? "中心服务暂时不可用" : "操作未完成"
       throw new ApiError(payload?.error?.message || payload?.message || fallback, response.status, code, payload?.error?.details)
     }
     if (response.status === 204) return undefined as T
@@ -85,6 +87,17 @@ export class HttpMissionApi implements MissionApi {
   async navigationGoal(id: string, pose: NavigationPose) { return this.robotAction(id, "navigation/goal", { ...pose }) }
   async navigationCancel(id: string) { return this.robotAction(id, "navigation/cancel") }
   async navigationStop(id: string) { return this.robotAction(id, "navigation/stop") }
+  async audioAssets(robotId: string) {
+    return (await this.request<{ assets: AudioAsset[] }>(`/api/robots/${encodeURIComponent(robotId)}/audio/assets`)).assets
+  }
+  async audioStatus(robotId: string) {
+    return this.request<AudioStatus>(`/api/robots/${encodeURIComponent(robotId)}/audio/status`)
+  }
+  async uploadAudio(robotId: string, file: File) {
+    const form = new FormData()
+    form.set("bundle", file)
+    return this.request<JsonObject>(`/api/robots/${encodeURIComponent(robotId)}/audio/upload`, { method: "POST", body: form })
+  }
   async fleetStop() { return this.request<JsonObject>("/api/fleet/stop", { method: "POST", body: "{}" }) }
   async maps() { return (await this.request<{ maps: StoredMap[] }>("/api/maps")).maps }
   async map(id: string) { return this.request<StoredMap>(`/api/maps/${id}`) }

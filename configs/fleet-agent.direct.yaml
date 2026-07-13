@@ -11,6 +11,14 @@ control:
   direct_motion_mode: motion
   manual_override_s: 0.8
 
+# Copy show assets into /root/peacekeeper-car/data/audio/ and play them through
+# the Mission API. The agent deliberately never accepts arbitrary host paths.
+audio:
+  enabled: true
+  player_command: ffplay
+  asset_dir: /root/peacekeeper-car/data/audio
+  max_asset_bytes: 67108864
+
 ros:
   distro_setup: /opt/ros/foxy/setup.bash
   workspace_setup: /root/yahboomcar_ros2_ws/yahboomcar_ws/install/setup.bash

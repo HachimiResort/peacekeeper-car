@@ -22,6 +22,21 @@ class LightControlRequest(BaseModel):
     duration_ms: int = Field(default=0, ge=0, le=255)
 
 
+class BuzzerControlRequest(BaseModel):
+    """Control the onboard buzzer; a positive duration automatically silences it."""
+
+    enabled: bool = True
+    duration_ms: int = Field(default=0, ge=0, le=60000)
+
+
+class AudioPlayRequest(BaseModel):
+    """Play one pre-provisioned asset from the fleet-agent audio directory."""
+
+    asset: str = Field(min_length=1, max_length=128)
+    loop: bool = False
+    volume: int = Field(default=100, ge=0, le=100)
+
+
 class ProcessRequest(BaseModel):
     process: str
 

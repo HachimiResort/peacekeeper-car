@@ -151,6 +151,23 @@ class FleetAgentClient:
             raise AgentError(409 if response.status_code == 409 else 502, "map_install_failed", str(data.get("message") or response.reason_phrase), data)
         return data
 
+    async def install_audio(self, robot: Robot, filename: str, payload: bytes) -> dict[str, Any]:
+        url = f"{robot.base_url.rstrip('/')}/api/audio/install"
+        try:
+            response = await self.client.post(
+                url,
+                files={"bundle": (filename, payload, "application/octet-stream")},
+                timeout=self.map_timeout_s,
+            )
+        except httpx.TimeoutException as exc:
+            raise AgentError(504, "agent_timeout", f"Audio install on {robot.id} timed out") from exc
+        except httpx.HTTPError as exc:
+            raise AgentError(503, "agent_unreachable", f"Robot {robot.id} is unreachable") from exc
+        data = self._json(response)
+        if response.is_error or data.get("ok") is False:
+            raise AgentError(409 if response.status_code == 409 else 502, "audio_install_failed", str(data.get("message") or response.reason_phrase), data)
+        return data
+
     async def _binary_get(
         self,
         robot: Robot,
