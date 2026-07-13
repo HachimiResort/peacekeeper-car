@@ -44,7 +44,7 @@ video:
 
 # Enable only after the Jetson-local engine and vision runtime are deployed.
 vision:
-  enabled: false
+  enabled: true
   engine_path: /root/peacekeeper-car/models/yolov8n.engine
   confidence: 0.4
   imgsz: 640

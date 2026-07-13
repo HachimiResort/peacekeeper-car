@@ -11,6 +11,7 @@ import type { MapDeployment, MapPoint, Robot, StoredMap } from "../api/types"
 import { CameraPreview } from "../components/camera-preview"
 import { LiveMapPreview } from "../components/live-map-preview"
 import { MapCanvas } from "../components/map-canvas"
+import { VisionDetectionCard } from "../components/vision-detection-card"
 import { Badge, Button, Card, EmptyState, InlineActionStatus, JsonPanel, LoadingBlock, PageHeader, StatusDot, fieldClass } from "../components/ui"
 
 type Direction = "forward" | "backward" | "left" | "right"
@@ -229,6 +230,8 @@ export function RobotDetailPage() {
         {!cameraAvailable && <InlineActionStatus tone="warning" title="摄像头暂不可用" detail={!currentRobot.enabled ? "车辆已停用，不能建立视频预览。" : "车辆离线，待重新上线后可打开摄像头。"} />}
         <CameraPreview api={api!} robotId={robotId} active={cameraActive} online={currentRobot.online} device={runtime?.video?.device ? String(runtime.video.device) : undefined} streaming={runtime?.video?.streaming} />
       </Card>
+
+      <VisionDetectionCard api={api!} robotId={robotId} available={cameraAvailable} />
 
       <Card className="panel span-2">
         <div className="panel-head"><div><h2>地图定位与导航</h2><p>只显示已安装到本车的不可变地图版本</p></div><Crosshair /></div>
