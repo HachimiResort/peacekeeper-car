@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - depends on optional local test deps
 import fleet_agent.patrol as patrol_module
 
 from fleet_agent.command_arbiter import CommandArbiter
-from fleet_agent.config import AgentConfig, PatrolConfig, ProcessConfig, SafetyConfig, load_config
+from fleet_agent.config import AgentConfig, PatrolConfig, ProcessConfig, SafetyConfig, VisionConfig, _to_dict, load_config
 from fleet_agent.mapping import MappingService
 from fleet_agent.map_bundle import install_map_bundle
 from fleet_agent import map_bundle as map_bundle_module
@@ -35,6 +35,8 @@ from fleet_agent.rosmaster_control import RosmasterController
 from fleet_agent.ros_control import CmdVelPublisher, DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from fleet_agent.state import Mode, RuntimeState
 from fleet_agent.video import VideoService
+from fleet_agent.vision import VisionCaptureService, VisionService, VisionUnavailable, VisionWorkerClient
+from fleet_agent.vision_worker import create_server
 
 API_TESTS_UNAVAILABLE = TestClient is None or app_module is None
 
@@ -239,6 +241,90 @@ class FakePatrolNavigation:
         return {"ok": True, "action_state": "canceled"}
 
 
+class FakeFrame:
+    shape = (480, 640, 3)
+
+
+class FakeBox:
+    def __init__(self, class_id, confidence, xyxy):
+        self.cls = [class_id]
+        self.conf = [confidence]
+        self.xyxy = [self]
+        self._xyxy = xyxy
+
+    def tolist(self):
+        return self._xyxy
+
+
+class FakeVisionResult:
+    names = {0: "person", 15: "cat"}
+    boxes = [
+        FakeBox(15, 0.91234, [100.0, 50.0, 300.0, 250.0]),
+        FakeBox(0, 0.80001, [10.0, 20.0, 40.0, 70.0]),
+    ]
+    speed = {"inference": 45.429}
+
+    def plot(self):
+        return "annotated-frame"
+
+
+class FakeVisionModel:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, frame, **kwargs):
+        self.calls.append((frame, kwargs))
+        return [FakeVisionResult()]
+
+
+class FakeVisionVideo:
+    def __init__(self, frame=None):
+        self.frame = frame
+        self.read_count = 0
+
+    def read_frame(self):
+        self.read_count += 1
+        return self.frame
+
+    @staticmethod
+    def encode_jpeg(frame):
+        if frame == "annotated-frame":
+            return b"annotated-jpeg"
+        if isinstance(frame, FakeFrame):
+            return b"source-jpeg"
+        return None
+
+
+class FakeVisionWorker:
+    def __init__(self):
+        self.requests = []
+
+    def infer(self, jpeg):
+        self.requests.append(jpeg)
+        return (
+            {
+                "ok": True,
+                "model": "yolov8n.engine",
+                "detections": [],
+                "label_counts": {},
+                "triggers": {},
+                "captured_at": 1.0,
+                "annotated_image_available": True,
+            },
+            b"worker-jpeg",
+        )
+
+    def status(self):
+        return {
+            "enabled": True,
+            "engine_path": "/models/yolov8n.engine",
+            "model_loaded": True,
+            "target_labels": ["cat"],
+            "last_result": None,
+            "last_error": None,
+        }
+
+
 def tracking_config():
     config = AgentConfig()
     config.processes = {
@@ -277,6 +363,94 @@ class CoreTests(unittest.TestCase):
             path = Path(result["path"])
             self.assertTrue(path.exists())
             self.assertEqual(path.read_bytes()[:2], b"\xff\xd8")
+
+    def test_vision_result_is_generic_with_configurable_cat_trigger(self):
+        model = FakeVisionModel()
+        config = VisionConfig(
+            enabled=True,
+            engine_path="/models/yolov8n.engine",
+            confidence=0.4,
+            target_labels=["cat", "dog"],
+        )
+        service = VisionService(config, model_factory=lambda path: model)
+
+        result, annotated = service.analyze(FakeFrame())
+
+        self.assertEqual(annotated, "annotated-frame")
+        self.assertEqual(model.calls[0][1]["device"], 0)
+        self.assertEqual(model.calls[0][1]["imgsz"], 640)
+        payload = result.as_dict()
+        self.assertEqual(payload["model"], "yolov8n.engine")
+        self.assertEqual(payload["image_width"], 640)
+        self.assertEqual(payload["label_counts"], {"cat": 1, "person": 1})
+        self.assertEqual(payload["triggers"]["cat"], {"detected": True, "count": 1})
+        self.assertEqual(payload["triggers"]["dog"], {"detected": False, "count": 0})
+        self.assertEqual(payload["detections"][0]["bbox"], {"x": 100.0, "y": 50.0, "width": 200.0, "height": 200.0})
+
+    def test_vision_does_not_load_a_model_until_enabled(self):
+        service = VisionService(VisionConfig(enabled=False), model_factory=lambda path: self.fail(path))
+
+        with self.assertRaisesRegex(VisionUnavailable, "disabled"):
+            service.analyze(FakeFrame())
+        self.assertFalse(service.status()["model_loaded"])
+
+    def test_vision_capture_reuses_the_agent_camera_frame_and_caches_result(self):
+        video = FakeVisionVideo(FakeFrame())
+        model = FakeVisionModel()
+        vision = VisionService(
+            VisionConfig(enabled=True, engine_path="/models/yolov8n.engine", target_labels=["cat"]),
+            model_factory=lambda path: model,
+        )
+        service = VisionCaptureService(video, vision)
+
+        payload = service.capture()
+
+        self.assertEqual(video.read_count, 1)
+        self.assertTrue(payload["annotated_image_available"])
+        self.assertEqual(payload["triggers"]["cat"], {"detected": True, "count": 1})
+        self.assertEqual(service.latest(), payload)
+        self.assertEqual(service.latest_jpeg(), b"annotated-jpeg")
+        self.assertTrue(service.status()["latest_available"])
+
+    def test_vision_capture_reports_unavailable_camera_without_loading_a_model(self):
+        service = VisionCaptureService(
+            FakeVisionVideo(),
+            VisionService(VisionConfig(enabled=True, engine_path="/models/yolov8n.engine"), model_factory=lambda path: self.fail(path)),
+        )
+
+        with self.assertRaisesRegex(VisionUnavailable, "Camera frame"):
+            service.capture()
+
+    def test_vision_capture_can_delegate_to_loopback_worker_without_loading_a_model(self):
+        worker = FakeVisionWorker()
+        service = VisionCaptureService(
+            FakeVisionVideo(FakeFrame()),
+            VisionService(VisionConfig(enabled=True, engine_path="/models/yolov8n.engine"), model_factory=lambda path: self.fail(path)),
+            worker=worker,
+        )
+
+        payload = service.capture()
+
+        self.assertEqual(worker.requests, [b"source-jpeg"])
+        self.assertEqual(payload["model"], "yolov8n.engine")
+        self.assertEqual(service.latest_jpeg(), b"worker-jpeg")
+
+    def test_vision_config_is_present_in_serialized_agent_config(self):
+        config = AgentConfig(vision=VisionConfig(enabled=True, target_labels=["cat", "person"]))
+
+        self.assertEqual(_to_dict(config)["vision"], {"enabled": True, "engine_path": "", "confidence": 0.4, "imgsz": 640, "target_labels": ["cat", "person"], "worker_url": "", "worker_timeout_s": 5.0})
+
+    def test_vision_worker_rejects_non_loopback_bind_addresses(self):
+        config = VisionConfig(enabled=True, engine_path="/models/yolov8n.engine")
+
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            create_server(config, host="0.0.0.0")
+
+    def test_vision_worker_client_rejects_non_loopback_urls(self):
+        config = VisionConfig(enabled=True, engine_path="/models/yolov8n.engine", worker_url="http://10.0.0.2:8092")
+
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            VisionWorkerClient(config)
 
     def test_mapping_save_sanitizes_name_and_checks_outputs(self):
         with tempfile.TemporaryDirectory() as temp_dir:

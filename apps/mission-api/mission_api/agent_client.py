@@ -93,6 +93,23 @@ class FleetAgentClient:
             params={"name": map_name},
         )
 
+    async def vision_status(self, robot: Robot) -> dict[str, Any]:
+        return await self.request(robot, "GET", "/api/vision/status", timeout_s=self.status_timeout_s)
+
+    async def vision_capture(self, robot: Robot) -> dict[str, Any]:
+        return await self.request(robot, "POST", "/api/vision/capture", timeout_s=self.control_timeout_s)
+
+    async def vision_latest(self, robot: Robot) -> dict[str, Any]:
+        return await self.request(robot, "GET", "/api/vision/latest", timeout_s=self.status_timeout_s)
+
+    async def vision_latest_image(self, robot: Robot) -> bytes:
+        return await self._binary_get(
+            robot,
+            "/api/vision/latest.jpg",
+            self.control_timeout_s,
+            "vision_image_failed",
+        )
+
     async def install_map(self, robot: Robot, bundle: bytes) -> dict[str, Any]:
         url = f"{robot.base_url.rstrip('/')}/api/maps/install"
         try:

@@ -13,6 +13,8 @@ import type {
   NavigationPose,
   StatusSubscriptionObserver,
   VehicleSavedMap,
+  VisionCapture,
+  VisionStatus,
 } from "./types"
 
 export class ApiError extends Error {
@@ -91,6 +93,10 @@ export class HttpMissionApi implements MissionApi {
   async liveMapStatus(robotId: string) { return this.request<LiveMapStatus>(`/api/robots/${encodeURIComponent(robotId)}/mapping/live-meta`) }
   async liveMapPreview(robotId: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/mapping/live.png`) }
   async videoSample(robotId: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/video/sample.jpg`) }
+  async visionStatus(robotId: string) { return this.request<VisionStatus>(`/api/robots/${encodeURIComponent(robotId)}/vision/status`) }
+  async visionCapture(robotId: string) { return this.request<VisionCapture>(`/api/robots/${encodeURIComponent(robotId)}/vision/capture`, { method: "POST", body: "{}" }) }
+  async visionLatest(robotId: string) { return this.request<VisionCapture>(`/api/robots/${encodeURIComponent(robotId)}/vision/latest`) }
+  async visionLatestImage(robotId: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/vision/latest.jpg`) }
   async mapDownload(id: string) { return this.blob(`/api/maps/${id}/download`) }
   async uploadMap(file: File, logicalName?: string) {
     const form = new FormData()

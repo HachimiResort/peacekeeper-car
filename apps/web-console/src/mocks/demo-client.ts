@@ -1,4 +1,4 @@
-import type { AlertRecord, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StatusSubscriptionObserver, StoredMap, VehicleSavedMap } from "../api/types"
+import type { AlertRecord, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StatusSubscriptionObserver, StoredMap, VehicleSavedMap, VisionCapture, VisionStatus } from "../api/types"
 
 const now = new Date()
 const iso = (minutes = 0) => new Date(now.getTime() - minutes * 60_000).toISOString()
@@ -44,6 +44,19 @@ const deployments: MapDeployment[] = [
   { id: "dep-1", map_id: "map-forest-v3", robot_id: "car_1", state: "installed", installed_name: "forest_lab__v3", error: null, created_at: iso(80), started_at: iso(80), finished_at: iso(79), map: { id: "map-forest-v3", logical_name: "forest_lab", version: 3 }, robot: { id: "car_1", name: "苍松一号" } },
   { id: "dep-2", map_id: "map-forest-v3", robot_id: "car_2", state: "installed", installed_name: "forest_lab__v3", error: null, created_at: iso(80), started_at: iso(80), finished_at: iso(78), map: { id: "map-forest-v3", logical_name: "forest_lab", version: 3 }, robot: { id: "car_2", name: "云杉二号" } },
 ]
+
+const visionCapture: VisionCapture = {
+  ok: true,
+  model: "yolov8n.engine",
+  image_width: 960,
+  image_height: 540,
+  inference_ms: 45.4,
+  detections: [{ label: "cat", confidence: 0.91, bbox: { x: 180, y: 120, width: 260, height: 210 } }],
+  label_counts: { cat: 1 },
+  triggers: { cat: { detected: true, count: 1 } },
+  captured_at: Date.now() / 1000,
+  annotated_image_available: true,
+}
 
 function page<T>(items: T[], filters: Record<string, string> = {}): Page<T> {
   const limit = Number(filters.limit || 50)
@@ -153,6 +166,12 @@ export class DemoMissionApi implements MissionApi {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="100%" height="100%" fill="#0f1b17"/><rect x="70" y="70" width="820" height="400" rx="28" fill="#1d3a31" stroke="#78c29b" stroke-width="6"/><circle cx="225" cy="270" r="84" fill="#2f7659"/><circle cx="225" cy="270" r="45" fill="#9fe0bc"/><path d="M410 215h300M410 270h210M410 325h265" stroke="#d8efe3" stroke-width="18" stroke-linecap="round"/><text x="72" y="40" font-family="sans-serif" font-size="28" fill="#9fe0bc">camera demo</text></svg>`
     return new Blob([svg], { type: "image/svg+xml" })
   }
+  async visionStatus(_robotId: string): Promise<VisionStatus> {
+    return { enabled: true, engine_path: null, model_loaded: true, target_labels: ["cat"], latest_available: true, last_result: structuredClone(visionCapture), last_error: null }
+  }
+  async visionCapture(_robotId: string) { return { ...structuredClone(visionCapture), captured_at: Date.now() / 1000 } }
+  async visionLatest(_robotId: string) { return structuredClone(visionCapture) }
+  async visionLatestImage(robotId: string) { return this.videoSample(robotId) }
   async mapDownload(id: string) { return new Blob([`demo bundle ${id}`], { type: "application/zip" }) }
   async uploadMap(file: File, logicalName?: string) { return { ok: true, demo: true, filename: file.name, logical_name: logicalName } }
   async importMap(payload: { robot_id: string; map_name: string; logical_name?: string }) { return { ok: true, demo: true, ...payload } }

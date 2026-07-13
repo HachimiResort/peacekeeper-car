@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 try:
     import yaml
@@ -47,6 +47,24 @@ class VideoConfig:
     width: int = 640
     height: int = 480
     fps: int = 20
+
+
+@dataclass
+class VisionConfig:
+    """Optional edge-inference settings.
+
+    The vision service is deliberately disabled by default. This keeps the
+    vehicle-control process free of model/GPU allocation until the feature is
+    explicitly configured on a car.
+    """
+
+    enabled: bool = False
+    engine_path: str = ""
+    confidence: float = 0.4
+    imgsz: int = 640
+    target_labels: List[str] = field(default_factory=lambda: ["cat"])
+    worker_url: str = ""
+    worker_timeout_s: float = 5.0
 
 
 @dataclass
@@ -98,6 +116,7 @@ class AgentConfig:
     ros: RosConfig = field(default_factory=RosConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
+    vision: VisionConfig = field(default_factory=VisionConfig)
     control: ControlConfig = field(default_factory=ControlConfig)
     processes: Dict[str, ProcessConfig] = field(
         default_factory=lambda: {
@@ -139,6 +158,7 @@ def _to_dict(config: AgentConfig) -> dict:
         "ros": vars(config.ros),
         "safety": vars(config.safety),
         "video": vars(config.video),
+        "vision": vars(config.vision),
         "control": vars(config.control),
         "processes": {key: vars(value) for key, value in config.processes.items()},
         "mapping": vars(config.mapping),
@@ -164,6 +184,7 @@ def _from_dict(raw: dict) -> AgentConfig:
         ros=RosConfig(**raw.get("ros", {})),
         safety=SafetyConfig(**raw.get("safety", {})),
         video=VideoConfig(**raw.get("video", {})),
+        vision=VisionConfig(**raw.get("vision", {})),
         control=ControlConfig(**raw.get("control", {})),
         processes=processes or AgentConfig().processes,
         mapping=MappingConfig(**raw.get("mapping", {})),

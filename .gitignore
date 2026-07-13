@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-mission-api/
 venv/
 .env
 
@@ -15,6 +16,8 @@ data/logs/
 apps/mission-api/.pytest_cache/
 *.mp4
 *.avi
+models/*.engine
+models/*.onnx
 *.tsbuildinfo
 
 extra/

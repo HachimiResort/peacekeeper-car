@@ -4,6 +4,10 @@ export type JsonObject = Record<string, unknown>
 
 type Schemas = components["schemas"]
 
+export type VisionDetection = Schemas["VisionDetection"]
+export type VisionCapture = Schemas["VisionCaptureResponse"]
+export type VisionStatus = Schemas["VisionStatusResponse"]
+
 export interface Robot extends Omit<Schemas["RobotResponse"], "last_seen" | "runtime_status" | "runtime_error"> {
   last_seen: string | null
   runtime_status: JsonObject | null
@@ -139,6 +143,10 @@ export interface MissionApi {
   liveMapStatus(robotId: string): Promise<LiveMapStatus>
   liveMapPreview(robotId: string): Promise<Blob>
   videoSample(robotId: string): Promise<Blob>
+  visionStatus(robotId: string): Promise<VisionStatus>
+  visionCapture(robotId: string): Promise<VisionCapture>
+  visionLatest(robotId: string): Promise<VisionCapture>
+  visionLatestImage(robotId: string): Promise<Blob>
   mapDownload(id: string): Promise<Blob>
   uploadMap(file: File, logicalName?: string): Promise<JsonObject>
   importMap(payload: { robot_id: string; map_name: string; logical_name?: string }): Promise<JsonObject>
