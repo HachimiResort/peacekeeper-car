@@ -2,6 +2,7 @@ import subprocess
 import hashlib
 import io
 import json
+import math
 import sys
 import tempfile
 import time
@@ -595,6 +596,52 @@ class CoreTests(unittest.TestCase):
         )
         self.assertEqual(payload["detections"][0]["range_source"], "lidar")
         self.assertAlmostEqual(payload["detections"][0]["range_m"], 2.5, places=3)
+
+    def test_range_estimator_can_fallback_to_known_lidar_mount_offsets(self):
+        estimator = TargetRangeEstimator("/scan")
+        angle_min = -3.14
+        angle_increment = 0.01
+        ranges = [float("inf")] * 800
+        expected_range = 0.72
+        # This detection sits on the left side of the image. For the current car
+        # layout the camera is approximately 90 degrees away from the lidar scan
+        # forward axis, so the valid scan window appears only after the fallback
+        # offset search is applied.
+        bearing_rad = math.radians(27.2)
+        target_angle = bearing_rad + math.radians(-90.0)
+        target_index = int(round((target_angle - angle_min) / angle_increment))
+        for index in range(target_index - 6, target_index + 7):
+            ranges[index] = expected_range
+        estimator._scan = ScanFrame(
+            angle_min=angle_min,
+            angle_increment=angle_increment,
+            range_min=0.05,
+            range_max=8.0,
+            ranges=tuple(ranges),
+            received_at=time.time(),
+        )
+
+        payload = estimator.enrich(
+            {
+                "ok": True,
+                "model": "yolo.engine",
+                "image_width": 640,
+                "image_height": 480,
+                "inference_ms": 10.0,
+                "captured_at": time.time(),
+                "annotated_image_available": True,
+                "detections": [
+                    {
+                        "label": "person",
+                        "confidence": 0.9,
+                        "bbox": {"x": 0.0, "y": 100.0, "width": 60.0, "height": 140.0},
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(payload["detections"][0]["range_source"], "lidar")
+        self.assertAlmostEqual(payload["detections"][0]["range_m"], expected_range, places=3)
 
     def test_vision_config_is_present_in_serialized_agent_config(self):
         config = AgentConfig(vision=VisionConfig(enabled=True, target_labels=["cat", "person"]))

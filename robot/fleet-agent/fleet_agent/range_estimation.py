@@ -83,6 +83,7 @@ class TargetRangeEstimator:
 
     DEPTH_STALE_AFTER_S = 2.0
     SCAN_STALE_AFTER_S = 1.5
+    DEFAULT_LIDAR_ANGLE_CANDIDATES_DEG = (0.0, -90.0, 90.0, -120.0, 120.0, -150.0, 150.0, -180.0, 180.0)
 
     def __init__(
         self,
@@ -91,12 +92,17 @@ class TargetRangeEstimator:
         depth_topic: str = "/camera/depth/image_raw",
         camera_horizontal_fov_deg: float = 60.0,
         lidar_angle_offset_deg: float = 0.0,
+        lidar_angle_candidates_deg: Optional[Sequence[float]] = None,
     ):
         self.scan_topic = scan_topic
         self.depth_topic = depth_topic
         self.setup_paths = tuple(setup_paths or ())
         self.camera_horizontal_fov_deg = float(camera_horizontal_fov_deg)
         self.lidar_angle_offset_deg = float(lidar_angle_offset_deg)
+        self.lidar_angle_candidates_deg = tuple(
+            float(value)
+            for value in (lidar_angle_candidates_deg or self.DEFAULT_LIDAR_ANGLE_CANDIDATES_DEG)
+        )
         self.node = None
         self.executor = None
         self.depth_subscription = None
@@ -276,27 +282,30 @@ class TargetRangeEstimator:
         if not scan.ranges or abs(scan.angle_increment) < 1e-9:
             return None
 
-        target_angle = bearing_rad + math.radians(self.lidar_angle_offset_deg)
         bbox_width = max(0.0, float(bbox.get("width") or 0.0))
         angular_width_deg = max(2.0, min(10.0, (bbox_width / max(image_width, 1)) * self.camera_horizontal_fov_deg + 1.0))
-        half_window_rad = math.radians(angular_width_deg / 2.0)
-        min_angle = target_angle - half_window_rad
-        max_angle = target_angle + half_window_rad
-        start_index = int(math.floor((min_angle - scan.angle_min) / scan.angle_increment))
-        end_index = int(math.ceil((max_angle - scan.angle_min) / scan.angle_increment))
-        values = []
-        for index in range(start_index, end_index + 1):
-            if index < 0 or index >= len(scan.ranges):
+        candidates: list[tuple[float, float, int]] = []
+        preferred: Optional[tuple[float, float, int]] = None
+        for offset_deg in self._iter_lidar_offsets():
+            sampled = self._sample_lidar_window(
+                scan,
+                bearing_rad + math.radians(offset_deg),
+                angular_width_deg,
+            )
+            if sampled is None:
                 continue
-            value = float(scan.ranges[index])
-            if not math.isfinite(value):
-                continue
-            if value < max(scan.range_min, 0.04) or value > scan.range_max:
-                continue
-            values.append(value)
-        if not values:
+            candidate = (offset_deg, sampled[0], sampled[1])
+            candidates.append(candidate)
+            if math.isclose(offset_deg, self.lidar_angle_offset_deg, abs_tol=1e-6):
+                preferred = candidate
+        if not candidates:
             return None
-        return float(median(values))
+        # Respect an explicit non-zero offset when it works; otherwise auto-pick
+        # the nearest valid obstacle among the known mounting candidates.
+        if preferred is not None and not math.isclose(self.lidar_angle_offset_deg, 0.0, abs_tol=1e-6):
+            return preferred[1]
+        best = min(candidates, key=lambda item: (item[1], -item[2], abs(item[0] - self.lidar_angle_offset_deg)))
+        return best[1]
 
     def _on_depth_image(self, msg) -> None:
         try:
@@ -360,6 +369,55 @@ class TargetRangeEstimator:
             return float(struct.unpack(">f" if frame.is_bigendian else "<f", raw)[0])
         return None
 
+    def _iter_lidar_offsets(self) -> tuple[float, ...]:
+        values = [self.lidar_angle_offset_deg, *self.lidar_angle_candidates_deg]
+        ordered: list[float] = []
+        for value in values:
+            if any(math.isclose(value, existing, abs_tol=1e-6) for existing in ordered):
+                continue
+            ordered.append(float(value))
+        return tuple(ordered)
+
+    def _sample_lidar_window(
+        self,
+        scan: ScanFrame,
+        target_angle: float,
+        angular_width_deg: float,
+    ) -> Optional[tuple[float, int]]:
+        half_window_rad = math.radians(angular_width_deg / 2.0)
+        normalized_target = self._normalize_scan_angle(scan, target_angle)
+        min_angle = normalized_target - half_window_rad
+        max_angle = normalized_target + half_window_rad
+        start_index = int(math.floor((min_angle - scan.angle_min) / scan.angle_increment))
+        end_index = int(math.ceil((max_angle - scan.angle_min) / scan.angle_increment))
+        values = []
+        for index in range(start_index, end_index + 1):
+            if index < 0 or index >= len(scan.ranges):
+                continue
+            value = float(scan.ranges[index])
+            if not math.isfinite(value):
+                continue
+            if value < max(scan.range_min, 0.04) or value > scan.range_max:
+                continue
+            values.append(value)
+        if not values:
+            return None
+        return float(median(values)), len(values)
+
+    @staticmethod
+    def _normalize_scan_angle(scan: ScanFrame, target_angle: float) -> float:
+        max_angle = scan.angle_min + scan.angle_increment * max(len(scan.ranges) - 1, 0)
+        full_turn = math.tau
+        normalized = float(target_angle)
+        while normalized < scan.angle_min:
+            normalized += full_turn
+        while normalized > max_angle:
+            normalized -= full_turn
+        return normalized
+
     def _bearing_from_pixel(self, center_x: float, image_width: int) -> float:
         normalized = (center_x / max(image_width, 1)) - 0.5
-        return normalized * math.radians(self.camera_horizontal_fov_deg)
+        # In the image plane, smaller x means "left of center". In ROS LaserScan
+        # convention, left side is a positive bearing (CCW), so the image sign
+        # must be flipped before projecting into scan angles.
+        return -normalized * math.radians(self.camera_horizontal_fov_deg)

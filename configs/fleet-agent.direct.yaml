@@ -61,7 +61,7 @@ processes:
   lidar:
     name: lidar
     command: bash -lc 'ros2 launch sllidar_ros2 sllidar_launch.py & ros2 run tf2_ros static_transform_publisher -0.0455 5.258E-05 0.3059 3.14 0 0 base_link laser & wait'
-    auto_start: false
+    auto_start: true
   laser_tracker:
     name: laser_tracker
     command: ros2 run icar_laser laser_Tracker_a1_X3
