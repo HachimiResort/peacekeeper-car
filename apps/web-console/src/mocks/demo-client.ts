@@ -176,6 +176,7 @@ export class DemoMissionApi implements MissionApi {
   async visionCapture(_robotId: string) { return { ...structuredClone(visionCapture), captured_at: Date.now() / 1000 } }
   async visionLatest(_robotId: string) { return structuredClone(visionCapture) }
   async visionLatestImage(robotId: string) { return this.videoSample(robotId) }
+  visionStreamUrl(robotId: string) { return this.videoStreamUrl(robotId) }
   async mapDownload(id: string) { return new Blob([`demo bundle ${id}`], { type: "application/zip" }) }
   async uploadMap(file: File, logicalName?: string) { return { ok: true, demo: true, filename: file.name, logical_name: logicalName } }
   async importMap(payload: { robot_id: string; map_name: string; logical_name?: string }) { return { ok: true, demo: true, ...payload } }

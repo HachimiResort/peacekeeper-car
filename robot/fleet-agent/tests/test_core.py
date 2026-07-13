@@ -31,6 +31,7 @@ from fleet_agent.map_bundle import install_map_bundle
 from fleet_agent import map_bundle as map_bundle_module
 from fleet_agent.navigation import NavigationService
 from fleet_agent.patrol import PatrolService
+from fleet_agent.range_estimation import DepthFrame, ScanFrame, TargetRangeEstimator
 from fleet_agent.rosmaster_control import RosmasterController
 from fleet_agent.ros_control import CmdVelPublisher, DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from fleet_agent.state import Mode, RuntimeState
@@ -143,6 +144,21 @@ class FakeDirectSubscriber:
 
     def status(self):
         return {"available": True, "ready": self.start_count > self.shutdown_count}
+
+
+class FakeLiveMapService:
+    def __init__(self):
+        self.start_count = 0
+        self.shutdown_count = 0
+
+    def start(self):
+        self.start_count += 1
+
+    def shutdown(self):
+        self.shutdown_count += 1
+
+    def status(self):
+        return {"available": True, "ready": self.start_count > self.shutdown_count, "has_map": False}
 
 
 class FakeMotionSink:
@@ -325,6 +341,33 @@ class FakeVisionWorker:
         }
 
 
+class FakeRangeEstimator:
+    def __init__(self):
+        self.payloads = []
+
+    def enrich(self, payload):
+        self.payloads.append(payload)
+        enriched = dict(payload)
+        enriched["detections"] = [
+            {
+                **item,
+                "bearing_deg": 0.0,
+                "range_m": 1.234,
+                "range_source": "lidar",
+            }
+            for item in payload.get("detections", [])
+        ]
+        enriched["range_measurements"] = {
+            "measured_count": len(enriched["detections"]),
+            "total_count": len(enriched["detections"]),
+            "sources": ["lidar"],
+        }
+        return enriched
+
+    def status(self):
+        return {"ready": True, "scan_available": True, "depth_available": False}
+
+
 def tracking_config():
     config = AgentConfig()
     config.processes = {
@@ -426,6 +469,23 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(service.latest_jpeg(), b"annotated-jpeg")
         self.assertTrue(service.status()["latest_available"])
 
+    def test_vision_capture_can_attach_range_estimates_to_detections(self):
+        video = FakeVisionVideo(FakeFrame())
+        model = FakeVisionModel()
+        range_estimator = FakeRangeEstimator()
+        service = VisionCaptureService(
+            video,
+            VisionService(VisionConfig(enabled=True, engine_path="/models/yolov8n.engine", target_labels=["cat"]), model_factory=lambda path: model),
+            range_estimator=range_estimator,
+        )
+
+        payload = service.capture()
+
+        self.assertEqual(payload["detections"][0]["range_source"], "lidar")
+        self.assertAlmostEqual(payload["detections"][0]["range_m"], 1.234)
+        self.assertEqual(payload["range_measurements"], {"measured_count": 2, "total_count": 2, "sources": ["lidar"]})
+        self.assertTrue(service.status()["range_estimation"]["ready"])
+
     def test_vision_capture_reports_unavailable_camera_without_loading_a_model(self):
         service = VisionCaptureService(
             FakeVisionVideo(),
@@ -448,6 +508,93 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(worker.requests, [b"source-jpeg"])
         self.assertEqual(payload["model"], "yolov8n.engine")
         self.assertEqual(service.latest_jpeg(), b"worker-jpeg")
+
+    def test_vision_capture_can_stream_mjpeg_frames(self):
+        service = VisionCaptureService(
+            FakeVisionVideo(FakeFrame()),
+            VisionService(VisionConfig(enabled=True, engine_path="/models/yolov8n.engine"), model_factory=lambda path: FakeVisionModel()),
+        )
+
+        frame = next(service.mjpeg_frames(0.03))
+
+        self.assertTrue(frame.startswith(b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"))
+        self.assertIn(b"annotated-jpeg", frame)
+
+    def test_range_estimator_prefers_depth_camera_and_falls_back_to_lidar(self):
+        estimator = TargetRangeEstimator("/scan")
+        estimator._depth = DepthFrame(
+            width=640,
+            height=480,
+            encoding="16UC1",
+            step=1280,
+            is_bigendian=False,
+            data=bytearray(1280 * 480),
+            received_at=time.time(),
+        )
+        depth_data = bytearray(estimator._depth.data)
+        for px, py in ((200, 150), (197, 147), (197, 153), (203, 147), (203, 153)):
+            offset = py * 1280 + px * 2
+            depth_data[offset:offset + 2] = int(1500).to_bytes(2, "little", signed=False)
+        estimator._depth = DepthFrame(
+            width=640,
+            height=480,
+            encoding="16UC1",
+            step=1280,
+            is_bigendian=False,
+            data=bytes(depth_data),
+            received_at=time.time(),
+        )
+        estimator._scan = ScanFrame(
+            angle_min=-1.57,
+            angle_increment=0.01,
+            range_min=0.05,
+            range_max=8.0,
+            ranges=tuple(2.5 for _ in range(400)),
+            received_at=time.time(),
+        )
+
+        payload = estimator.enrich(
+            {
+                "ok": True,
+                "model": "yolo.engine",
+                "image_width": 640,
+                "image_height": 480,
+                "inference_ms": 10.0,
+                "captured_at": time.time(),
+                "annotated_image_available": True,
+                "detections": [
+                    {
+                        "label": "cat",
+                        "confidence": 0.9,
+                        "bbox": {"x": 100.0, "y": 50.0, "width": 200.0, "height": 200.0},
+                    }
+                ],
+            }
+        )
+        self.assertEqual(payload["detections"][0]["range_source"], "depth_camera")
+        self.assertAlmostEqual(payload["detections"][0]["range_m"], 1.5, places=3)
+
+        estimator._depth = None
+        payload = estimator.enrich(
+            {
+                "ok": True,
+                "model": "yolo.engine",
+                "image_width": 640,
+                "image_height": 480,
+                "inference_ms": 10.0,
+                "captured_at": time.time(),
+                "annotated_image_available": True,
+                "detections": [
+                    {
+                        "label": "cat",
+                        "confidence": 0.9,
+                        "bbox": {"x": 288.0, "y": 100.0, "width": 64.0, "height": 120.0},
+                    }
+                ],
+            }
+        )
+        self.assertEqual(payload["detections"][0]["range_source"], "lidar")
+        self.assertAlmostEqual(payload["detections"][0]["range_m"], 2.5, places=3)
 
     def test_vision_config_is_present_in_serialized_agent_config(self):
         config = AgentConfig(vision=VisionConfig(enabled=True, target_labels=["cat", "person"]))
@@ -1243,10 +1390,12 @@ class CoreTests(unittest.TestCase):
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
                 patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
-                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map):
             fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
             with TestClient(app) as client:
@@ -1276,10 +1425,12 @@ class CoreTests(unittest.TestCase):
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
                 patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
-                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map):
             fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
             with TestClient(app) as client:
@@ -1296,10 +1447,12 @@ class CoreTests(unittest.TestCase):
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
                 patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
-                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map):
             fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
             with TestClient(app) as client:
@@ -1316,10 +1469,12 @@ class CoreTests(unittest.TestCase):
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
                 patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
-                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map):
             fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
             with TestClient(app) as client:
@@ -1335,10 +1490,12 @@ class CoreTests(unittest.TestCase):
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
                 patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
-                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber):
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map):
             fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
             with TestClient(app) as client:
@@ -1353,10 +1510,12 @@ class CoreTests(unittest.TestCase):
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
                 patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
                 patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map), \
                 patch.object(app_module, "NavigationService", FakeNavigationService):
             fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
@@ -1370,10 +1529,12 @@ class CoreTests(unittest.TestCase):
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
                 patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
                 patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map), \
                 patch.object(app_module, "NavigationService", FakeNavigationService):
             fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)
@@ -1391,10 +1552,12 @@ class CoreTests(unittest.TestCase):
         fake_pm = FakeManagedProcessManager(config)
         fake_controller = FakeMotionController()
         fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
         with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
                 patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
                 patch.object(app_module, "RosmasterController", return_value=fake_controller), \
                 patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map), \
                 patch.object(app_module, "NavigationService", FakeNavigationService):
             fake_odom_cls.return_value.status.return_value = {"ready": True}
             app = app_module.create_app(config)

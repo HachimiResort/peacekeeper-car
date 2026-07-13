@@ -100,6 +100,9 @@ export class HttpMissionApi implements MissionApi {
   async visionCapture(robotId: string) { return this.request<VisionCapture>(`/api/robots/${encodeURIComponent(robotId)}/vision/capture`, { method: "POST", body: "{}" }) }
   async visionLatest(robotId: string) { return this.request<VisionCapture>(`/api/robots/${encodeURIComponent(robotId)}/vision/latest`) }
   async visionLatestImage(robotId: string) { return this.blob(`/api/robots/${encodeURIComponent(robotId)}/vision/latest.jpg`) }
+  visionStreamUrl(robotId: string) {
+    return `/api/robots/${encodeURIComponent(robotId)}/vision/stream.mjpg?token=${encodeURIComponent(this.token)}`
+  }
   async mapDownload(id: string) { return this.blob(`/api/maps/${id}/download`) }
   async uploadMap(file: File, logicalName?: string) {
     const form = new FormData()

@@ -154,3 +154,28 @@ async def test_agent_client_captures_and_reads_vision_results():
     assert (await client.vision_latest(robot))["ok"] is True
     assert (await client.vision_latest_image(robot)).startswith(b"\xff\xd8")
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_client_opens_vision_stream():
+    async def handler(request: httpx.Request):
+        assert request.url.path == "/api/vision/stream.mjpg"
+        return httpx.Response(
+            200,
+            content=b"--frame\r\nContent-Type: image/jpeg\r\n\r\n",
+            headers={"content-type": "multipart/x-mixed-replace; boundary=frame"},
+        )
+
+    client = FleetAgentClient("test-token", 2, 5, 120)
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        headers={"X-Peacekeeper-Token": "test-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    robot = Robot(id="car_1", name="Car 1", base_url="http://car-1", capabilities={})
+
+    response = await client.open_vision_stream(robot)
+
+    assert response.headers["content-type"].startswith("multipart/x-mixed-replace")
+    await response.aclose()
+    await client.close()

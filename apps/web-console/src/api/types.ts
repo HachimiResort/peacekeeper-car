@@ -4,8 +4,26 @@ export type JsonObject = Record<string, unknown>
 
 type Schemas = components["schemas"]
 
-export type VisionDetection = Schemas["VisionDetection"]
-export type VisionCapture = Schemas["VisionCaptureResponse"]
+type GeneratedVisionDetection = Schemas["VisionDetection"]
+type GeneratedVisionCapture = Schemas["VisionCaptureResponse"]
+
+export type VisionDetection = GeneratedVisionDetection & {
+  bearing_deg?: number | null
+  range_m?: number | null
+  range_source?: string | null
+}
+
+export interface VisionRangeSummary {
+  measured_count: number
+  total_count: number
+  sources: string[]
+}
+
+export type VisionCapture = Omit<GeneratedVisionCapture, "detections"> & {
+  detections?: VisionDetection[]
+  range_measurements?: VisionRangeSummary | null
+}
+
 export type VisionStatus = Schemas["VisionStatusResponse"]
 
 export interface Robot extends Omit<Schemas["RobotResponse"], "last_seen" | "runtime_status" | "runtime_error"> {
@@ -148,6 +166,7 @@ export interface MissionApi {
   visionCapture(robotId: string): Promise<VisionCapture>
   visionLatest(robotId: string): Promise<VisionCapture>
   visionLatestImage(robotId: string): Promise<Blob>
+  visionStreamUrl(robotId: string): string
   mapDownload(id: string): Promise<Blob>
   uploadMap(file: File, logicalName?: string): Promise<JsonObject>
   importMap(payload: { robot_id: string; map_name: string; logical_name?: string }): Promise<JsonObject>

@@ -1698,6 +1698,76 @@
         }
       }
     },
+    "/api/robots/{robot_id}/vision/stream.mjpg": {
+      "get": {
+        "tags": [
+          "robots"
+        ],
+        "summary": "Vision Stream",
+        "operationId": "vision_stream_api_robots__robot_id__vision_stream_mjpg_get",
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Robot Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid shared token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation conflicts with current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected service error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/robots/{robot_id}/navigation/start": {
       "post": {
         "tags": [
@@ -4995,6 +5065,16 @@
             "type": "boolean",
             "title": "Annotated Image Available",
             "default": true
+          },
+          "range_measurements": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisionRangeSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -5021,6 +5101,40 @@
           },
           "bbox": {
             "$ref": "#/components/schemas/VisionBoundingBox"
+          },
+          "bearing_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bearing Deg"
+          },
+          "range_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range M"
+          },
+          "range_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Source"
           }
         },
         "type": "object",
@@ -5030,6 +5144,33 @@
           "bbox"
         ],
         "title": "VisionDetection"
+      },
+      "VisionRangeSummary": {
+        "properties": {
+          "measured_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Measured Count"
+          },
+          "total_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Count"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "measured_count",
+          "total_count"
+        ],
+        "title": "VisionRangeSummary"
       },
       "VisionStatusResponse": {
         "properties": {

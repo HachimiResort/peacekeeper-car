@@ -28,4 +28,9 @@ describe("Mission API client", () => {
     const api = new HttpMissionApi("valid-token")
     expect(api.videoStreamUrl("car_1")).toBe("/api/robots/car_1/video/stream.mjpg?token=valid-token")
   })
+
+  it("builds vision stream url with query token", () => {
+    const api = new HttpMissionApi("valid-token")
+    expect(api.visionStreamUrl("car_1")).toBe("/api/robots/car_1/vision/stream.mjpg?token=valid-token")
+  })
 })

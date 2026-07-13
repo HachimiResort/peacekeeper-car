@@ -58,11 +58,20 @@ class VisionDetection(BaseModel):
     label: str
     confidence: float = Field(ge=0.0, le=1.0)
     bbox: VisionBoundingBox
+    bearing_deg: Optional[float] = None
+    range_m: Optional[float] = Field(default=None, ge=0.0)
+    range_source: Optional[str] = None
 
 
 class VisionTrigger(BaseModel):
     detected: bool
     count: int = Field(ge=0)
+
+
+class VisionRangeSummary(BaseModel):
+    measured_count: int = Field(ge=0)
+    total_count: int = Field(ge=0)
+    sources: list[str] = Field(default_factory=list)
 
 
 class VisionCaptureResponse(BaseModel):
@@ -76,6 +85,7 @@ class VisionCaptureResponse(BaseModel):
     triggers: dict[str, VisionTrigger] = Field(default_factory=dict)
     captured_at: float = Field(ge=0.0)
     annotated_image_available: bool = True
+    range_measurements: Optional[VisionRangeSummary] = None
 
 
 class VisionStatusResponse(BaseModel):

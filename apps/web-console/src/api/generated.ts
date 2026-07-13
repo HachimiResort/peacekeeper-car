@@ -380,6 +380,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/robots/{robot_id}/vision/stream.mjpg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Vision Stream */
+        get: operations["vision_stream_api_robots__robot_id__vision_stream_mjpg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/robots/{robot_id}/navigation/start": {
         parameters: {
             query?: never;
@@ -1267,6 +1284,7 @@ export interface components {
              * @default true
              */
             annotated_image_available: boolean;
+            range_measurements?: components["schemas"]["VisionRangeSummary"] | null;
         };
         /** VisionDetection */
         VisionDetection: {
@@ -1275,6 +1293,21 @@ export interface components {
             /** Confidence */
             confidence: number;
             bbox: components["schemas"]["VisionBoundingBox"];
+            /** Bearing Deg */
+            bearing_deg?: number | null;
+            /** Range M */
+            range_m?: number | null;
+            /** Range Source */
+            range_source?: string | null;
+        };
+        /** VisionRangeSummary */
+        VisionRangeSummary: {
+            /** Measured Count */
+            measured_count: number;
+            /** Total Count */
+            total_count: number;
+            /** Sources */
+            sources?: string[];
         };
         /** VisionStatusResponse */
         VisionStatusResponse: {
@@ -2656,6 +2689,64 @@ export interface operations {
         };
     };
     vision_latest_image_api_robots__robot_id__vision_latest_jpg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid shared token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Operation conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unexpected service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    vision_stream_api_robots__robot_id__vision_stream_mjpg_get: {
         parameters: {
             query?: never;
             header?: never;

@@ -272,6 +272,30 @@ async def vision_latest_image(robot_id: str, request: Request, session: AsyncSes
     )
 
 
+@router.get("/{robot_id}/vision/stream.mjpg")
+async def vision_stream(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    upstream = await request.app.state.agent_client.open_vision_stream(robot)
+
+    async def stream_bytes():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+
+    return StreamingResponse(
+        stream_bytes(),
+        media_type=upstream.headers.get("content-type", "multipart/x-mixed-replace; boundary=frame"),
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/{robot_id}/navigation/start")
 async def navigation_start(robot_id: str, payload: MapNameRequest, request: Request, session: AsyncSession = Depends(get_session)):
     return await _proxy(request, session, robot_id, "/api/navigation/start", payload.model_dump(), "navigation_start")

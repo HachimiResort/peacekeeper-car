@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .config import VisionConfig
+from .range_estimation import TargetRangeEstimator
 
 
 class VisionUnavailable(RuntimeError):
@@ -247,35 +248,60 @@ class VisionCaptureService:
     ``encode_jpeg`` methods supplied by ``VideoService``.
     """
 
-    def __init__(self, video: Any, vision: VisionService, worker: Optional[VisionWorkerClient] = None):
+    def __init__(
+        self,
+        video: Any,
+        vision: VisionService,
+        worker: Optional[VisionWorkerClient] = None,
+        range_estimator: Optional[TargetRangeEstimator] = None,
+    ):
         self.video = video
         self.vision = vision
         self.worker = worker
+        self.range_estimator = range_estimator
         self._lock = threading.RLock()
         self._latest_payload: Optional[Dict[str, Any]] = None
         self._latest_jpeg: Optional[bytes] = None
 
     def capture(self) -> Dict[str, Any]:
         with self._lock:
-            frame = self.video.read_frame()
-            if frame is None:
-                raise VisionUnavailable("Camera frame is unavailable")
-            if self.worker is not None:
-                source_jpeg = self.video.encode_jpeg(frame)
-                if source_jpeg is None:
-                    raise VisionUnavailable("Could not encode camera frame for vision worker")
-                payload, jpeg = self.worker.infer(source_jpeg)
-            else:
-                result, annotated_frame = self.vision.analyze(frame)
-                jpeg = self.video.encode_jpeg(annotated_frame)
-                if jpeg is None:
-                    raise VisionUnavailable("Could not encode annotated detection image")
-                payload = result.as_dict()
-                payload["captured_at"] = time.time()
-                payload["annotated_image_available"] = True
-            self._latest_payload = payload
-            self._latest_jpeg = jpeg
-            return dict(payload)
+            return self._capture_locked()
+
+    def _capture_locked(self) -> Dict[str, Any]:
+        frame = self.video.read_frame()
+        if frame is None:
+            raise VisionUnavailable("Camera frame is unavailable")
+        if self.worker is not None:
+            source_jpeg = self.video.encode_jpeg(frame)
+            if source_jpeg is None:
+                raise VisionUnavailable("Could not encode camera frame for vision worker")
+            payload, jpeg = self.worker.infer(source_jpeg)
+        else:
+            result, annotated_frame = self.vision.analyze(frame)
+            jpeg = self.video.encode_jpeg(annotated_frame)
+            if jpeg is None:
+                raise VisionUnavailable("Could not encode annotated detection image")
+            payload = result.as_dict()
+            payload["captured_at"] = time.time()
+            payload["annotated_image_available"] = True
+        if self.range_estimator is not None:
+            payload = self.range_estimator.enrich(payload)
+        self._latest_payload = payload
+        self._latest_jpeg = jpeg
+        return dict(payload)
+
+    def mjpeg_frames(self, frame_interval_s: float):
+        frame_interval_s = max(frame_interval_s, 0.03)
+        while True:
+            try:
+                with self._lock:
+                    self._capture_locked()
+                    jpeg = self._latest_jpeg
+                if jpeg is not None:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+            except VisionUnavailable:
+                pass
+            time.sleep(frame_interval_s)
 
     def latest(self) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -289,4 +315,6 @@ class VisionCaptureService:
         status = self.worker.status() if self.worker is not None else self.vision.status()
         status["last_result"] = dict(self._latest_payload) if self._latest_payload else None
         status["latest_available"] = self._latest_payload is not None
+        if self.range_estimator is not None:
+            status["range_estimation"] = self.range_estimator.status()
         return status

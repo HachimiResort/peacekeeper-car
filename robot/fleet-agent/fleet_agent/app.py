@@ -19,6 +19,7 @@ from .mapping import MappingService
 from .navigation import NavigationService
 from .patrol import PatrolService
 from .process_manager import ProcessManager
+from .range_estimation import TargetRangeEstimator
 from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from .rosmaster_control import RosmasterController
 from .schemas import CmdVelRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
@@ -80,11 +81,15 @@ def create_app(config: AgentConfig) -> FastAPI:
         setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
     )
     video = VideoService(config.video, run_dir)
+    range_estimator = TargetRangeEstimator(
+        config.ros.scan_topic,
+        setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
+    )
     vision_worker = VisionWorkerClient(config.vision) if config.vision.worker_url else None
     vision = VisionService(config.vision)
     if config.vision.enabled and vision_worker is None:
         vision.load()
-    vision_capture = VisionCaptureService(video, vision, worker=vision_worker)
+    vision_capture = VisionCaptureService(video, vision, worker=vision_worker, range_estimator=range_estimator)
     mapping = MappingService(config, process_manager)
     navigation = NavigationService(
         config,
@@ -114,6 +119,10 @@ def create_app(config: AgentConfig) -> FastAPI:
             live_map.start()
         except Exception as exc:
             state.set_error(f"Live map preview failed: {exc}")
+        try:
+            range_estimator.start()
+        except Exception as exc:
+            range_estimator.last_error = str(exc)
         if direct_cmd_vel is not None:
             try:
                 direct_cmd_vel.start()
@@ -129,6 +138,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             if direct_cmd_vel is not None:
                 direct_cmd_vel.shutdown()
             cmd_vel.shutdown()
+            range_estimator.shutdown()
             video.stop()
             process_manager.stop_all()
 
@@ -290,6 +300,14 @@ def create_app(config: AgentConfig) -> FastAPI:
         if image is None:
             return JSONResponse({"ok": False, "message": "No annotated vision image has been captured"}, status_code=404)
         return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store, max-age=0"})
+
+    @app.get("/api/vision/stream.mjpg")
+    async def vision_stream():
+        return StreamingResponse(
+            vision_capture.mjpeg_frames(max(1 / max(video.config.fps, 1), 0.03)),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={"Cache-Control": "no-store, max-age=0", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/mapping/latest")
     async def mapping_latest(name: Optional[str] = Query(default=None)):

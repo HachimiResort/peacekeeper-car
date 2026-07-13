@@ -83,6 +83,13 @@ class FleetAgentClient:
 
     async def open_video_stream(self, robot: Robot) -> httpx.Response:
         url = f"{robot.base_url.rstrip('/')}/video.mjpg"
+        return await self._open_stream(robot, url, "video_stream_failed")
+
+    async def open_vision_stream(self, robot: Robot) -> httpx.Response:
+        url = f"{robot.base_url.rstrip('/')}/api/vision/stream.mjpg"
+        return await self._open_stream(robot, url, "vision_stream_failed")
+
+    async def _open_stream(self, robot: Robot, url: str, error_code: str) -> httpx.Response:
         request = self.client.build_request("GET", url)
         try:
             response = await self.client.send(request, stream=True)
@@ -91,11 +98,11 @@ class FleetAgentClient:
         except httpx.HTTPError as exc:
             raise AgentError(503, "agent_unreachable", f"Robot {robot.id} is unreachable", {"url": url}) from exc
         if response.is_error:
-            data = self._json(response)
+            data = self._json_bytes(await response.aread())
             await response.aclose()
             message = data.get("message") or response.reason_phrase
             status = 409 if response.status_code == 409 else 502
-            raise AgentError(status, "video_stream_failed", str(message), {"agent_status": response.status_code})
+            raise AgentError(status, error_code, str(message), {"agent_status": response.status_code})
         return response
 
     async def saved_maps(self, robot: Robot) -> dict[str, Any]:
@@ -173,3 +180,11 @@ class FleetAgentClient:
             return value if isinstance(value, dict) else {"data": value}
         except Exception:
             return {"message": response.text[:1000]}
+
+    @staticmethod
+    def _json_bytes(raw: bytes) -> dict[str, Any]:
+        try:
+            value = httpx.Response(200, content=raw).json()
+            return value if isinstance(value, dict) else {"data": value}
+        except Exception:
+            return {"message": raw[:1000].decode("utf-8", errors="replace")}

@@ -36,8 +36,7 @@ describe("RobotDetailPage control safety", () => {
     expect(actionSpy.mock.calls.map((call) => call[1])).not.toContain("control/stop")
   })
 
-  it("shows an annotated YOLO image and supports a new single-frame capture", async () => {
-    const captureSpy = vi.spyOn(DemoMissionApi.prototype, "visionCapture")
+  it("shows a live YOLO stream and latest detection metrics", async () => {
     render(
       <FeedbackProvider>
         <MemoryRouter initialEntries={["/robots/car_1"]}>
@@ -48,12 +47,12 @@ describe("RobotDetailPage control safety", () => {
       </FeedbackProvider>,
     )
 
-    expect(await screen.findByRole("heading", { name: "YOLO 单帧识别" })).toBeInTheDocument()
-    expect(await screen.findByAltText("YOLO 带框识别结果")).toHaveAttribute("src", "blob:test")
-    const captureButton = screen.getByRole("button", { name: "识别当前画面" })
-    expect(captureButton).toBeEnabled()
-    await userEvent.click(captureButton)
-    await waitFor(() => expect(captureSpy).toHaveBeenCalledWith("car_1"))
+    expect(await screen.findByRole("heading", { name: "YOLO 实时识别" })).toBeInTheDocument()
+    const toggleButton = screen.getByRole("button", { name: "开启实时识别" })
+    await waitFor(() => expect(toggleButton).toBeEnabled())
+    await userEvent.click(toggleButton)
+    expect(await screen.findByAltText("YOLO 实时识别结果")).toHaveAttribute("src", expect.any(String))
+    expect(screen.getByRole("button", { name: "关闭实时识别" })).toBeInTheDocument()
     expect(await screen.findByText("45.4 ms")).toBeInTheDocument()
   })
 })
