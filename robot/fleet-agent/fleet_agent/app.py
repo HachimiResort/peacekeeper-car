@@ -24,6 +24,7 @@ from .rosmaster_control import RosmasterController
 from .schemas import CmdVelRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
 from .video import VideoService
+from .vision import VisionCaptureService, VisionService, VisionUnavailable, VisionWorkerClient
 
 
 async def _run_blocking(func, *args, **kwargs):
@@ -79,6 +80,8 @@ def create_app(config: AgentConfig) -> FastAPI:
         setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
     )
     video = VideoService(config.video, run_dir)
+    vision_worker = VisionWorkerClient(config.vision) if config.vision.worker_url else None
+    vision_capture = VisionCaptureService(video, VisionService(config.vision), worker=vision_worker)
     mapping = MappingService(config, process_manager)
     navigation = NavigationService(
         config,
@@ -169,6 +172,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             },
             "process_details": process_status,
             "video": video.status(),
+            "vision": vision_capture.status(),
             "navigation": navigation.status(),
             "patrol": patrol.status(),
             "ros": ros_status,
@@ -258,6 +262,31 @@ def create_app(config: AgentConfig) -> FastAPI:
     async def video_sample_jpg():
         frame = await _run_blocking(video.read_jpeg)
         return Response(frame, media_type="image/jpeg")
+
+    @app.get("/api/vision/status")
+    async def vision_status():
+        return JSONResponse(await _run_blocking(vision_capture.status))
+
+    @app.post("/api/vision/capture")
+    async def vision_capture_frame():
+        try:
+            return JSONResponse(await _run_blocking(vision_capture.capture))
+        except VisionUnavailable as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)
+
+    @app.get("/api/vision/latest")
+    async def vision_latest():
+        latest = await _run_blocking(vision_capture.latest)
+        if latest is None:
+            return JSONResponse({"ok": False, "message": "No vision result has been captured"}, status_code=404)
+        return JSONResponse(latest)
+
+    @app.get("/api/vision/latest.jpg")
+    async def vision_latest_jpg():
+        image = await _run_blocking(vision_capture.latest_jpeg)
+        if image is None:
+            return JSONResponse({"ok": False, "message": "No annotated vision image has been captured"}, status_code=404)
+        return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store, max-age=0"})
 
     @app.get("/api/mapping/latest")
     async def mapping_latest(name: Optional[str] = Query(default=None)):

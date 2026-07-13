@@ -42,6 +42,18 @@ video:
   height: 480
   fps: 20
 
+# TensorRT engines are built on the target Jetson and are not committed.
+# Keep this disabled until the vehicle image includes its vision runtime.
+vision:
+  enabled: false
+  engine_path: /root/peacekeeper-car/models/yolov8n.engine
+  confidence: 0.4
+  imgsz: 640
+  target_labels:
+    - cat
+  worker_url: http://127.0.0.1:8092
+  worker_timeout_s: 20.0
+
 processes:
   lidar:
     name: lidar

@@ -47,6 +47,47 @@ class ManualCommand(BaseModel):
     source: str = "mission-api"
 
 
+class VisionBoundingBox(BaseModel):
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+class VisionDetection(BaseModel):
+    label: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    bbox: VisionBoundingBox
+
+
+class VisionTrigger(BaseModel):
+    detected: bool
+    count: int = Field(ge=0)
+
+
+class VisionCaptureResponse(BaseModel):
+    ok: bool = True
+    model: str
+    image_width: int = Field(gt=0)
+    image_height: int = Field(gt=0)
+    inference_ms: float = Field(ge=0.0)
+    detections: list[VisionDetection] = Field(default_factory=list)
+    label_counts: dict[str, int] = Field(default_factory=dict)
+    triggers: dict[str, VisionTrigger] = Field(default_factory=dict)
+    captured_at: float = Field(ge=0.0)
+    annotated_image_available: bool = True
+
+
+class VisionStatusResponse(BaseModel):
+    enabled: bool
+    engine_path: Optional[str] = None
+    model_loaded: bool
+    target_labels: list[str] = Field(default_factory=list)
+    latest_available: bool = False
+    last_result: Optional[VisionCaptureResponse] = None
+    last_error: Optional[str] = None
+
+
 class MapNameRequest(BaseModel):
     map_name: str = Field(min_length=1, max_length=128)
 

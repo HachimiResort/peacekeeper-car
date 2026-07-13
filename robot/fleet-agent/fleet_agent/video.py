@@ -70,20 +70,37 @@ class VideoService:
             self.streaming = False
 
     def read_jpeg(self) -> bytes:
+        frame = self.read_frame()
+        encoded = self.encode_jpeg(frame)
+        if encoded is None:
+            return self.last_jpeg
+        with self.lock:
+            self.last_jpeg = encoded
+        return encoded
+
+    def read_frame(self):
+        """Return one BGR frame from the agent-owned camera, or ``None``.
+
+        Vision code must use this method rather than opening another
+        ``VideoCapture`` for the same device.
+        """
         self.start()
         with self.lock:
             if cv2 is None or self.capture is None:
-                return self.last_jpeg
+                return None
             ok, frame = self.capture.read()
             if not ok or frame is None:
-                return self.last_jpeg
-            ok, encoded = cv2.imencode(".jpg", frame)
-            if not ok:
-                return self.last_jpeg
-            self.last_jpeg = encoded.tobytes()
+                return None
             if self.recording and self.record_writer is not None:
                 self.record_writer.write(frame)
-            return self.last_jpeg
+            return frame
+
+    @staticmethod
+    def encode_jpeg(frame):
+        if cv2 is None or frame is None:
+            return None
+        ok, encoded = cv2.imencode(".jpg", frame)
+        return encoded.tobytes() if ok else None
 
     def mjpeg_frames(self):
         while True:

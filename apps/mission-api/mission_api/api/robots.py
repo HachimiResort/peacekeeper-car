@@ -9,7 +9,19 @@ from ..dependencies import get_robot_or_404, get_session
 from ..errors import ApiError
 from ..models import Robot
 from ..repositories import MissionRepository, RobotRepository
-from ..schemas import ManualCommand, MapNameRequest, MapSaveRequest, PatrolRequest, PoseRequest, RobotCreate, RobotListResponse, RobotResponse, RobotUpdate
+from ..schemas import (
+    ManualCommand,
+    MapNameRequest,
+    MapSaveRequest,
+    PatrolRequest,
+    PoseRequest,
+    RobotCreate,
+    RobotListResponse,
+    RobotResponse,
+    RobotUpdate,
+    VisionCaptureResponse,
+    VisionStatusResponse,
+)
 from ..views import robot_view
 
 router = APIRouter(prefix="/api/robots", tags=["robots"])
@@ -195,6 +207,43 @@ async def saved_map_preview(
     return Response(
         image,
         media_type="image/png",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@router.get("/{robot_id}/vision/status", response_model=VisionStatusResponse)
+async def vision_status(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    return await request.app.state.agent_client.vision_status(robot)
+
+
+@router.post("/{robot_id}/vision/capture", response_model=VisionCaptureResponse)
+async def vision_capture(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    return await request.app.state.agent_client.vision_capture(robot)
+
+
+@router.get("/{robot_id}/vision/latest", response_model=VisionCaptureResponse)
+async def vision_latest(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    return await request.app.state.agent_client.vision_latest(robot)
+
+
+@router.get("/{robot_id}/vision/latest.jpg")
+async def vision_latest_image(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    image = await request.app.state.agent_client.vision_latest_image(robot)
+    return Response(
+        image,
+        media_type="image/jpeg",
         headers={"Cache-Control": "no-store, max-age=0"},
     )
 

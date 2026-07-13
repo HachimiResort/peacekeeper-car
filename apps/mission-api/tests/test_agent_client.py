@@ -103,3 +103,29 @@ async def test_agent_client_reads_video_sample_as_bytes():
 
     assert image.startswith(b"\xff\xd8\xff")
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_client_captures_and_reads_vision_results():
+    async def handler(request: httpx.Request):
+        if request.url.path == "/api/vision/capture":
+            assert request.method == "POST"
+            return httpx.Response(200, json={"ok": True, "model": "yolov8n.engine"})
+        if request.url.path == "/api/vision/latest":
+            return httpx.Response(200, json={"ok": True, "model": "yolov8n.engine"})
+        if request.url.path == "/api/vision/latest.jpg":
+            return httpx.Response(200, content=b"\xff\xd8vision", headers={"content-type": "image/jpeg"})
+        raise AssertionError(request.url.path)
+
+    client = FleetAgentClient("test-token", 2, 5, 120)
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        headers={"X-Peacekeeper-Token": "test-token"},
+        transport=httpx.MockTransport(handler),
+    )
+    robot = Robot(id="car_1", name="Car 1", base_url="http://car-1", capabilities={})
+
+    assert (await client.vision_capture(robot))["model"] == "yolov8n.engine"
+    assert (await client.vision_latest(robot))["ok"] is True
+    assert (await client.vision_latest_image(robot)).startswith(b"\xff\xd8")
+    await client.close()
