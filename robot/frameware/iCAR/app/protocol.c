@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "cmsis_os2.h"
+#include "los_interrupt.h"
 #include "los_task.h"
 #include "ohos_init.h"
 #include "at32f403a_407.h"
@@ -21,48 +22,141 @@
 #include "bsp_car_lights.h"
 
 /********************************************************************************************************/
-/* 命令接收缓存 */
-uint8_t RxBuffer[PTO_MAX_BUF_LEN];
-/* 接收数据下标 */
-uint8_t RxIndex = 0;
-/* 接收状态机 */
-uint8_t RxFlag = 0;
-/* 新命令接收标志 */
-uint8_t New_CMD_flag = 0;
-/* 新命令数据长度 */
-uint8_t New_CMD_length;
+/* UART ISR uses RxBuffer only to assemble the frame currently on the wire. */
+static uint8_t RxBuffer[PTO_MAX_BUF_LEN];
+static uint8_t RxIndex = 0;
+static uint8_t RxFlag = 0;
+static uint8_t RxLength = 0;
+
+/*
+ * Discrete commands retain their order in this small FIFO. Motion commands
+ * are intentionally kept out of the FIFO: only their newest value matters.
+ */
+#define PTO_EVENT_QUEUE_DEPTH 4U
+#define PTO_EVENT_QUEUE_MASK  (PTO_EVENT_QUEUE_DEPTH - 1U)
+
+typedef struct {
+    uint8_t length;
+    uint8_t data[PTO_MAX_BUF_LEN];
+} ProtocolFrame;
+
+static ProtocolFrame EventQueue[PTO_EVENT_QUEUE_DEPTH];
+static volatile uint8_t EventQueueWrite = 0;
+static volatile uint8_t EventQueueRead = 0;
+static volatile uint32_t EventQueueOverflow = 0;
+static volatile uint32_t RxChecksumError = 0;
+
+static ProtocolFrame LatestMotionFrame;
+static volatile uint8_t LatestMotionValid = 0;
+
+/* ActiveFrame is owned exclusively by vTask_Control. */
+static ProtocolFrame ActiveFrame;
+static uint8_t ActiveFrameValid = 0;
 /********************************************************************************************************/
-// 获取命令标志
+static uint8_t Protocol_IsMotionCommand(uint8_t func_id)
+{
+    return (func_id == FUNC_MOTOR) || (func_id == FUNC_CAR_RUN) ||
+           (func_id == FUNC_MOTION);
+}
+
+static uint8_t Protocol_IsChecksumValid(const uint8_t *data, uint8_t length)
+{
+    uint8_t sum = 0;
+    for (uint8_t i = 2; i < (length - 1U); i++)
+    {
+        sum += data[i];
+    }
+    return sum == data[length - 1U];
+}
+
+static void Protocol_ResetRxState(void)
+{
+    RxIndex = 0;
+    RxFlag = 0;
+    RxLength = 0;
+    RxBuffer[0] = 0;
+    RxBuffer[1] = 0;
+}
+
+/* Called only by USART1_IRQHandler after a complete frame has arrived. */
+static void Protocol_StoreFrame(const uint8_t *data, uint8_t length)
+{
+    if (!Protocol_IsChecksumValid(data, length))
+    {
+        RxChecksumError++;
+        return;
+    }
+
+    if (Protocol_IsMotionCommand(data[3]))
+    {
+        memcpy(LatestMotionFrame.data, data, length);
+        LatestMotionFrame.length = length;
+        /* Write this last so vTask_Control never consumes a partial frame. */
+        LatestMotionValid = 1;
+        return;
+    }
+
+    uint8_t next = (EventQueueWrite + 1U) & PTO_EVENT_QUEUE_MASK;
+    if (next == EventQueueRead)
+    {
+        EventQueueOverflow++;
+        return;
+    }
+
+    memcpy(EventQueue[EventQueueWrite].data, data, length);
+    EventQueue[EventQueueWrite].length = length;
+    /* Publish the completed entry only after its data has been written. */
+    EventQueueWrite = next;
+}
+
+/* Get_CMD_Flag also promotes the next command into the task-owned buffer. */
 uint8_t Get_CMD_Flag(void)
 {
-    return New_CMD_flag;
+    uint8_t has_frame = 0;
+    uint32_t int_save;
+
+    if (ActiveFrameValid != 0)
+    {
+        return 1;
+    }
+
+    int_save = LOS_IntLock();
+    if (LatestMotionValid != 0)
+    {
+        memcpy(&ActiveFrame, &LatestMotionFrame, sizeof(ActiveFrame));
+        LatestMotionValid = 0;
+        has_frame = 1;
+    }
+    else if (EventQueueRead != EventQueueWrite)
+    {
+        memcpy(&ActiveFrame, &EventQueue[EventQueueRead], sizeof(ActiveFrame));
+        EventQueueRead = (EventQueueRead + 1U) & PTO_EVENT_QUEUE_MASK;
+        has_frame = 1;
+    }
+    LOS_IntRestore(int_save);
+
+    ActiveFrameValid = has_frame;
+    return has_frame;
 }
-// 获取接收的数据
+
 uint8_t *Get_RxBuffer(void)
 {
-    return (uint8_t *)RxBuffer;
+    return ActiveFrame.data;
 }
-// 获取命令长度
+
 uint8_t Get_CMD_Length(void)
 {
-    return New_CMD_length;
+    return ActiveFrame.length;
 }
-// 清除命令数据和相关标志
+
 void Clear_CMD_Flag(void)
 {
-    for (uint8_t i = 0; i < New_CMD_length; i++)
-    {
-        RxBuffer[i] = 0;
-    }
-    New_CMD_length = 0;
-    New_CMD_flag = 0;
+    ActiveFrame.length = 0;
+    ActiveFrameValid = 0;
 }
 /********************************************************************************************************/
-// 接收数据
 void Upper_Data_Receive(uint8_t Rx_Temp)
 {
-    if (New_CMD_flag != 0)
-        return;
     switch (RxFlag)
     {
     case 0:
@@ -74,10 +168,7 @@ void Upper_Data_Receive(uint8_t Rx_Temp)
         }
         else
         {
-            RxBuffer[0] = Rx_Temp;
-            // printf("PTO_HEAD ERR:%#2x\n", RxBuffer[0]);
-            RxBuffer[0] = 0x0;
-            RxFlag = 0;
+            RxBuffer[0] = 0;
         }
         break;
 
@@ -91,40 +182,30 @@ void Upper_Data_Receive(uint8_t Rx_Temp)
         }
         else
         {
-            RxBuffer[1] = Rx_Temp;
-            // printf("PTO_DEVICE_ID ERR:%#2x\n", RxBuffer[1]);
-            RxFlag = 0;
-            RxBuffer[0] = 0x0;
+            /* Preserve a new header byte so FF FF FC can re-synchronise. */
+            RxBuffer[0] = (Rx_Temp == PTO_HEAD) ? PTO_HEAD : 0;
+            RxFlag = (Rx_Temp == PTO_HEAD) ? 1 : 0;
         }
         break;
     case 2:
-        New_CMD_length = Rx_Temp + 2;
-        if (New_CMD_length >= PTO_MAX_BUF_LEN)
+        RxLength = Rx_Temp + 2U;
+        if ((RxLength < 5U) || (RxLength > PTO_MAX_BUF_LEN))
         {
-            // printf("PTO_MAX_BUF_LEN ERR:%#2x\n", New_CMD_length);
-            RxIndex = 0;
-            RxFlag = 0;
-            RxBuffer[0] = 0;
-            RxBuffer[1] = 0;
-            New_CMD_length = 0;
+            Protocol_ResetRxState();
             break;
         }
         RxBuffer[RxIndex] = Rx_Temp;
-        // printf("PTO_MAX_BUF_LEN:%#2x",RxBuffer[RxIndex]);
         RxIndex++;
         RxFlag = 3;
         break;
 
     case 3:
         RxBuffer[RxIndex] = Rx_Temp;
-        // printf("data:%#2x",RxBuffer[RxIndex]);
         RxIndex++;
-        if (RxIndex >= New_CMD_length)
+        if (RxIndex >= RxLength)
         {
-            // printf("\n");
-            New_CMD_flag = 1;
-            RxIndex = 0;
-            RxFlag = 0;
+            Protocol_StoreFrame(RxBuffer, RxLength);
+            Protocol_ResetRxState();
         }
         break;
 
@@ -132,6 +213,60 @@ void Upper_Data_Receive(uint8_t Rx_Temp)
         break;
     }
 }
+
+static osThreadId_t BeepThreadId = NULL;
+static volatile uint16_t PendingBeepTime = 0;
+static volatile uint8_t BeepPending = 0;
+
+static void BeepTask(void *arg)
+{
+    (void)arg;
+    while (1)
+    {
+        uint16_t time = 0;
+        uint8_t pending = 0;
+        uint32_t int_save = LOS_IntLock();
+        if (BeepPending != 0)
+        {
+            time = PendingBeepTime;
+            BeepPending = 0;
+            pending = 1;
+        }
+        LOS_IntRestore(int_save);
+
+        if (pending != 0)
+        {
+            bsp_beep_play(time);
+        }
+        else
+        {
+            osDelay(1);
+        }
+    }
+}
+
+static void Protocol_PlayBeepAsync(uint16_t time)
+{
+    if (BeepThreadId == NULL)
+    {
+        const osThreadAttr_t attr = {
+            .name = "BeepThread",
+            .stack_size = 1024,
+            .priority = osPriorityNormal,
+        };
+        BeepThreadId = osThreadNew(BeepTask, NULL, &attr);
+        if (BeepThreadId == NULL)
+        {
+            return;
+        }
+    }
+
+    uint32_t int_save = LOS_IntLock();
+    PendingBeepTime = time;
+    BeepPending = 1;
+    LOS_IntRestore(int_save);
+}
+
 typedef struct {
     uint8_t delay;
 } LightParam;
@@ -194,7 +329,7 @@ void Upper_Data_Parse(uint8_t *data_buf, uint8_t num)
     {
         uint16_t time = *(data_buf + 5) << 8 | *(data_buf + 4);
         // printf("beep:%d\n", time);
-        bsp_beep_play(time);
+        Protocol_PlayBeepAsync(time);
         break;
     }
     /* 控制电机，未使用编码器 */

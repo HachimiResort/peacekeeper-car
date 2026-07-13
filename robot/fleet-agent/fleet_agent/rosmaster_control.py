@@ -33,6 +33,7 @@ class RosmasterController:
         self.last_feedback_error: Optional[str] = None
         self.feedback_thread_started = False
         self.last_publish_ok = False
+        self.last_light_command = {"left": False, "right": False, "duration_ms": 0}
         self._stop_event = threading.Event()
         self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True)
         self._watchdog.start()
@@ -91,6 +92,39 @@ class RosmasterController:
             self.deadline = None
             self.last_publish_ok = True
 
+    def control_lights(self, left: bool, right: bool, duration_ms: int = 0) -> dict:
+        """Set iCAR headlights through the Rosmaster-owned serial connection.
+
+        The light command is not part of the public Rosmaster_Lib API, so this
+        writes its documented 0x70 protocol frame through the existing
+        Rosmaster serial handle.  Holding ``lock`` keeps each whole command
+        sequence from interleaving with motion commands on /dev/myserial.
+        """
+        duration = int(duration_ms)
+        if not 0 <= duration <= 0xFF:
+            raise ValueError("duration_ms must be between 0 and 255")
+
+        self.start()
+        frames = self._light_frames(bool(left), bool(right), duration)
+        with self.lock:
+            serial_port = getattr(self.bot, "ser", None)
+            if serial_port is None or not callable(getattr(serial_port, "write", None)):
+                raise RuntimeError("Rosmaster_Lib serial handle is not available")
+            for frame in frames:
+                serial_port.write(frame)
+            if callable(getattr(serial_port, "flush", None)):
+                serial_port.flush()
+            self.last_light_command = {
+                "left": bool(left),
+                "right": bool(right),
+                "duration_ms": duration,
+            }
+
+        return {
+            **self.last_light_command,
+            "frames": [frame.hex().upper() for frame in frames],
+        }
+
     def shutdown(self) -> None:
         self._stop_event.set()
         try:
@@ -136,6 +170,7 @@ class RosmasterController:
             "feedback_thread_started": self.feedback_thread_started,
             "last_feedback": dict(self.last_feedback),
             "last_feedback_error": self.last_feedback_error,
+            "last_light_command": dict(self.last_light_command),
             "ttl_active": self.deadline is not None and time.monotonic() < self.deadline,
             "port": self.control.rosmaster_port,
             "motion_mode": self.control.direct_motion_mode,
@@ -191,6 +226,21 @@ class RosmasterController:
 
     def _speed(self) -> int:
         return max(10, min(80, int(self.control.rosmaster_speed)))
+
+    @classmethod
+    def _light_frames(cls, left: bool, right: bool, duration_ms: int) -> list[bytes]:
+        if duration_ms and left and right:
+            return [cls._light_frame(action=3, light=0, duration_ms=duration_ms)]
+        return [
+            cls._light_frame(action=1 if left else 2, light=1, duration_ms=duration_ms if left else 0),
+            cls._light_frame(action=1 if right else 2, light=2, duration_ms=duration_ms if right else 0),
+        ]
+
+    @staticmethod
+    def _light_frame(action: int, light: int, duration_ms: int) -> bytes:
+        # Firmware protocol: FF FC 06 70 <action> <left=1|right=2> <ms> <sum>.
+        payload = bytes((0x06, 0x70, action, light, duration_ms))
+        return b"\xFF\xFC" + payload + bytes((sum(payload) & 0xFF,))
 
     @staticmethod
     def _clip(value: float, limit: float) -> float:

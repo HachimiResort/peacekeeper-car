@@ -12,6 +12,16 @@ class CmdVelRequest(BaseModel):
     source: str = "web"
 
 
+class LightControlRequest(BaseModel):
+    """Set the iCAR headlight state through the shared Rosmaster serial link."""
+
+    left: bool = True
+    right: bool = True
+    # The firmware treats zero as a persistent state; 1..255 auto-turns on
+    # lights off after the requested number of milliseconds.
+    duration_ms: int = Field(default=0, ge=0, le=255)
+
+
 class ProcessRequest(BaseModel):
     process: str
 

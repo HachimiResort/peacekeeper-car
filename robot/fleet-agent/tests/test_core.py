@@ -112,6 +112,7 @@ class FakeManagedProcessManager:
 class FakeMotionController:
     def __init__(self):
         self.published = []
+        self.light_commands = []
         self.stop_count = 0
         self.shutdown_count = 0
 
@@ -120,6 +121,11 @@ class FakeMotionController:
 
     def stop(self):
         self.stop_count += 1
+
+    def control_lights(self, left, right, duration_ms):
+        command = {"left": left, "right": right, "duration_ms": duration_ms}
+        self.light_commands.append(command)
+        return command
 
     def shutdown(self):
         self.shutdown_count += 1
@@ -1286,6 +1292,56 @@ class CoreTests(unittest.TestCase):
         self.assertIn(("run", 5, 25), fake.calls)
         controller.shutdown()
 
+    def test_rosmaster_backend_writes_light_frames_to_its_existing_serial_port(self):
+        class FakeSerial:
+            def __init__(self):
+                self.writes = []
+                self.flush_count = 0
+
+            def write(self, data):
+                self.writes.append(bytes(data))
+
+            def flush(self):
+                self.flush_count += 1
+
+        class FakeBot:
+            def __init__(self):
+                self.ser = FakeSerial()
+
+            def set_car_run(self, state, speed):
+                del state, speed
+
+            def set_car_motion(self, x, y, z):
+                del x, y, z
+
+            def set_motor(self, a, b, c, d):
+                del a, b, c, d
+
+            def set_beep(self, value):
+                del value
+
+        fake = FakeBot()
+        controller = RosmasterController(
+            AgentConfig().control,
+            AgentConfig().safety,
+            bot_factory=lambda: fake,
+        )
+
+        result = controller.control_lights(True, False, duration_ms=0)
+        controller.control_lights(True, True, duration_ms=100)
+
+        self.assertEqual(result["frames"], ["FFFC067001010078", "FFFC06700202007A"])
+        self.assertEqual(
+            fake.ser.writes,
+            [
+                bytes.fromhex("FF FC 06 70 01 01 00 78"),
+                bytes.fromhex("FF FC 06 70 02 02 00 7A"),
+                bytes.fromhex("FF FC 06 70 03 00 64 DD"),
+            ],
+        )
+        self.assertEqual(fake.ser.flush_count, 2)
+        controller.shutdown()
+
     def test_rosmaster_backend_exposes_motion_feedback(self):
         class FakeBot:
             def __init__(self):
@@ -1430,6 +1486,30 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(sink.commands, [(0.2, 0.1, 0.0, 600)])
         self.assertEqual(sink.stop_count, 1)
+
+    @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
+    def test_light_api_uses_the_rosmaster_controller(self):
+        config = tracking_config()
+        fake_pm = FakeManagedProcessManager(config)
+        fake_controller = FakeMotionController()
+        fake_subscriber = FakeDirectSubscriber()
+        fake_live_map = FakeLiveMapService()
+        with patch.object(app_module, "ProcessManager", return_value=fake_pm), \
+                patch.object(app_module, "DirectOdomPublisher") as fake_odom_cls, \
+                patch.object(app_module, "RosmasterController", return_value=fake_controller), \
+                patch.object(app_module, "DirectCmdVelSubscriber", return_value=fake_subscriber), \
+                patch.object(app_module, "LiveMapSubscriber", return_value=fake_live_map):
+            fake_odom_cls.return_value.status.return_value = {"ready": True}
+            app = app_module.create_app(config)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/control/lights",
+                    json={"left": True, "right": False, "duration_ms": 100},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "left": True, "right": False, "duration_ms": 100})
+        self.assertEqual(fake_controller.light_commands, [{"left": True, "right": False, "duration_ms": 100}])
 
     @unittest.skipIf(API_TESTS_UNAVAILABLE, "FastAPI app test dependencies are not available")
     def test_api_requires_shared_token_when_enabled(self):

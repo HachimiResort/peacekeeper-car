@@ -23,7 +23,7 @@ from .process_manager import ProcessManager
 from .range_estimation import TargetRangeEstimator
 from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from .rosmaster_control import RosmasterController
-from .schemas import CmdVelRequest, HazardHoldRequest, HazardMonitorRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
+from .schemas import CmdVelRequest, LightControlRequest, HazardHoldRequest, HazardMonitorRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
 from .video import VideoService
 from .vision import VisionCaptureService, VisionService, VisionUnavailable, VisionWorkerClient
@@ -484,6 +484,20 @@ def create_app(config: AgentConfig) -> FastAPI:
     @app.post("/api/control/manual_cmd")
     async def control_manual_cmd(payload: CmdVelRequest):
         return await publish_manual_command(payload)
+
+    @app.post("/api/control/lights")
+    async def control_lights(payload: LightControlRequest):
+        try:
+            result = await _run_blocking(
+                rosmaster.control_lights,
+                payload.left,
+                payload.right,
+                payload.duration_ms,
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            state.set_error(str(exc))
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=503)
 
     @app.post("/api/control/stop")
     async def control_stop():

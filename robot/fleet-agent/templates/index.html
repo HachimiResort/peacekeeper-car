@@ -304,6 +304,17 @@
         </div>
       </section>
       <section>
+        <h2>Headlight Test</h2>
+        <label>Duration ms <input id="lightDuration" type="number" min="0" max="255" step="1" value="0"></label>
+        <div class="grid" style="margin-top: 8px;">
+          <label class="check-label"><input id="lightLeft" type="checkbox" checked> Left</label>
+          <label class="check-label"><input id="lightRight" type="checkbox" checked> Right</label>
+          <button id="applyLights" class="primary">Apply</button>
+          <button id="lightsOff" class="warn">Both Off</button>
+        </div>
+        <div id="lightStatus" class="nav-summary">0 ms keeps the selected state; 1–255 ms turns selected lights off automatically.</div>
+      </section>
+      <section>
         <h2>Mapping</h2>
         <div class="grid">
           <button id="startMapping" class="primary">Start Mapping</button>
@@ -380,6 +391,10 @@
   <script>
     const speed = document.getElementById("speed");
     const speedValue = document.getElementById("speedValue");
+    const lightDuration = document.getElementById("lightDuration");
+    const lightLeft = document.getElementById("lightLeft");
+    const lightRight = document.getElementById("lightRight");
+    const lightStatus = document.getElementById("lightStatus");
     const statusEl = document.getElementById("status");
     const modeEl = document.getElementById("mode");
     const dotEl = document.getElementById("ws-dot");
@@ -1024,6 +1039,25 @@
 
     speed.addEventListener("input", () => {
       speedValue.textContent = Number(speed.value).toFixed(2);
+    });
+
+    async function applyLights(left = lightLeft.checked, right = lightRight.checked, durationMs = Number(lightDuration.value || 0)) {
+      const result = await postJson("/api/control/lights", {
+        left,
+        right,
+        duration_ms: durationMs,
+      });
+      lightLeft.checked = left;
+      lightRight.checked = right;
+      lightStatus.textContent = `Sent: left=${left ? "on" : "off"}, right=${right ? "on" : "off"}, duration=${durationMs} ms`;
+      return result;
+    }
+
+    document.getElementById("applyLights").onclick = () => applyLights().catch((err) => {
+      lightStatus.textContent = `Light command failed: ${err.message || err}`;
+    });
+    document.getElementById("lightsOff").onclick = () => applyLights(false, false, 0).catch((err) => {
+      lightStatus.textContent = `Light command failed: ${err.message || err}`;
     });
 
     document.getElementById("startMapping").onclick = () => postJson("/api/mapping/start").catch(alert);
