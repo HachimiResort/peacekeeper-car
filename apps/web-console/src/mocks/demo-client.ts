@@ -1,4 +1,4 @@
-import type { AlertRecord, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StatusSubscriptionObserver, StoredMap, VehicleSavedMap, VisionCapture, VisionStatus } from "../api/types"
+import type { AlertRecord, HazardStatus, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StatusSubscriptionObserver, StoredMap, VehicleSavedMap, VisionCapture, VisionStatus } from "../api/types"
 
 const now = new Date()
 const iso = (minutes = 0) => new Date(now.getTime() - minutes * 60_000).toISOString()
@@ -32,8 +32,8 @@ const missions: Mission[] = [
 ]
 
 const events: RobotEvent[] = [
-  { id: "event-1", robot_id: "car_1", mission_id: "mission-1", event_type: "smoke_detected", severity: "warning", payload: { confidence: 0.82, zone: "北侧样区" }, occurred_at: iso(4), received_at: iso(4) },
-  { id: "event-2", robot_id: "car_2", mission_id: null, event_type: "patrol_checkpoint", severity: "info", payload: { checkpoint: 3 }, occurred_at: iso(33), received_at: iso(33) },
+  { id: "event-1", event_key: "demo-hazard-1", robot_id: "car_1", mission_id: "mission-1", event_type: "smoke_detected", severity: "warning", payload: { confidence: 0.82, zone: "北侧样区" }, occurred_at: iso(4), received_at: iso(4) },
+  { id: "event-2", event_key: "demo-event-2", robot_id: "car_2", mission_id: null, event_type: "patrol_checkpoint", severity: "info", payload: { checkpoint: 3 }, occurred_at: iso(33), received_at: iso(33) },
 ]
 
 const alerts: AlertRecord[] = [
@@ -51,7 +51,7 @@ const visionCapture: VisionCapture = {
   image_width: 960,
   image_height: 540,
   inference_ms: 45.4,
-  detections: [{ label: "cat", confidence: 0.91, bbox: { x: 180, y: 120, width: 260, height: 210 } }],
+  detections: [{ label: "cat", confidence: 0.91, bbox: { x: 180, y: 120, width: 260, height: 210 }, localization_valid: false }],
   label_counts: { cat: 1 },
   triggers: { cat: { detected: true, count: 1 } },
   captured_at: Date.now() / 1000,
@@ -177,6 +177,10 @@ export class DemoMissionApi implements MissionApi {
   async visionLatest(_robotId: string) { return structuredClone(visionCapture) }
   async visionLatestImage(robotId: string) { return this.videoSample(robotId) }
   visionStreamUrl(robotId: string) { return this.videoStreamUrl(robotId) }
+  async hazardStatus(_robotId: string): Promise<HazardStatus> { return { enabled: false, state: "DISABLED", current_event_key: null, current_detection: null, confirmation_hits: 0, confirmation_window: 5, hold_started_at: null, auto_resume_remaining_s: null, takeover: false, hold_requested: false, last_error: null, outbox: { pending: 0, mission_api_configured: true, last_error: null } } }
+  async setHazardMonitor(_robotId: string, enabled: boolean) { return { ok: true, hazards: { enabled } } }
+  async hazardAction(_robotId: string, eventKey: string, action: "takeover" | "resume" | "hold", _payload: JsonObject = {}) { return { ok: true, event_key: eventKey, action } }
+  eventEvidenceUrl(_eventId: string, _kind: "raw" | "annotated" | "metadata") { return this.videoStreamUrl("car_1") }
   async mapDownload(id: string) { return new Blob([`demo bundle ${id}`], { type: "application/zip" }) }
   async uploadMap(file: File, logicalName?: string) { return { ok: true, demo: true, filename: file.name, logical_name: logicalName } }
   async importMap(payload: { robot_id: string; map_name: string; logical_name?: string }) { return { ok: true, demo: true, ...payload } }
@@ -185,7 +189,7 @@ export class DemoMissionApi implements MissionApi {
   async missions(filters: Record<string, string> = {}) { return page(missions.filter((item) => (!filters.robot_id || item.robot_id === filters.robot_id) && (!filters.state || item.state === filters.state) && (!filters.mission_type || item.mission_type === filters.mission_type)), filters) }
   async events(filters: Record<string, string> = {}) { return page(events.filter((item) => (!filters.robot_id || item.robot_id === filters.robot_id) && (!filters.severity || item.severity === filters.severity) && (!filters.event_type || item.event_type === filters.event_type)), filters) }
   async alerts(filters: Record<string, string> = {}) { return page(alerts.filter((item) => (!filters.robot_id || item.event.robot_id === filters.robot_id) && (!filters.state || item.state === filters.state)), filters) }
-  async confirmAlert(id: string, confirmedBy: string, resolution?: string) { const value = alerts.find((item) => item.id === id); if (value) Object.assign(value, { state: "confirmed", confirmed_by: confirmedBy, confirmed_at: new Date().toISOString(), resolution: resolution || null }); return { ok: true, demo: true } }
+  async confirmAlert(id: string, confirmedBy: string, resolution?: string, action: "acknowledge" | "takeover" | "false_positive" | "resolved" = "acknowledge") { const value = alerts.find((item) => item.id === id); if (value) Object.assign(value, { state: action === "resolved" || action === "false_positive" ? "resolved" : "confirmed", action, confirmed_by: confirmedBy, confirmed_at: new Date().toISOString(), resolution: resolution || null }); return { ok: true, demo: true } }
   subscribeStatus(listener: (message: RuntimeStatusMessage) => void, observer: StatusSubscriptionObserver = {}) {
     this.listeners.add(listener)
     observer.onOpen?.()

@@ -23,6 +23,9 @@ class RosConfig:
     odom_frame: str = "odom"
     base_frame: str = "base_footprint"
     base_link_frame: str = "base_link"
+    map_frame: str = "map"
+    laser_frame: str = "laser"
+    camera_frame: str = "camera_link"
     publish_odom: bool = True
     publish_tf: bool = True
     odom_period_s: float = 0.05
@@ -65,6 +68,23 @@ class VisionConfig:
     target_labels: List[str] = field(default_factory=lambda: ["cat"])
     worker_url: str = ""
     worker_timeout_s: float = 5.0
+    monitor_fps: float = 2.0
+    stream_fps: float = 5.0
+
+
+@dataclass
+class HazardConfig:
+    enabled: bool = True
+    confidence: float = 0.5
+    confirmation_window: int = 5
+    confirmation_hits: int = 3
+    stop_distance_m: float = 1.5
+    clear_after_s: float = 10.0
+    cooldown_s: float = 30.0
+    evidence_max_bytes: int = 2 * 1024 * 1024 * 1024
+    robot_id: str = ""
+    mission_api_url: str = ""
+    mission_api_token: str = ""
 
 
 @dataclass
@@ -117,6 +137,7 @@ class AgentConfig:
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
+    hazards: HazardConfig = field(default_factory=HazardConfig)
     control: ControlConfig = field(default_factory=ControlConfig)
     processes: Dict[str, ProcessConfig] = field(
         default_factory=lambda: {
@@ -159,6 +180,7 @@ def _to_dict(config: AgentConfig) -> dict:
         "safety": vars(config.safety),
         "video": vars(config.video),
         "vision": vars(config.vision),
+        "hazards": vars(config.hazards),
         "control": vars(config.control),
         "processes": {key: vars(value) for key, value in config.processes.items()},
         "mapping": vars(config.mapping),
@@ -185,6 +207,7 @@ def _from_dict(raw: dict) -> AgentConfig:
         safety=SafetyConfig(**raw.get("safety", {})),
         video=VideoConfig(**raw.get("video", {})),
         vision=VisionConfig(**raw.get("vision", {})),
+        hazards=HazardConfig(**raw.get("hazards", {})),
         control=ControlConfig(**raw.get("control", {})),
         processes=processes or AgentConfig().processes,
         mapping=MappingConfig(**raw.get("mapping", {})),

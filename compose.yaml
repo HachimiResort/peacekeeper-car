@@ -27,12 +27,14 @@ services:
       PEACEKEEPER_SHARED_TOKEN: ${PEACEKEEPER_SHARED_TOKEN:?set PEACEKEEPER_SHARED_TOKEN in .env}
       PEACEKEEPER_CARS_FILE: /app/config/cars.yaml
       PEACEKEEPER_MAP_STORAGE_DIR: /var/lib/peacekeeper/maps
+      PEACEKEEPER_EVIDENCE_STORAGE_DIR: /var/lib/peacekeeper/evidence
       PEACEKEEPER_STATUS_POLL_S: ${STATUS_POLL_S:-1.0}
       PEACEKEEPER_STATUS_TIMEOUT_S: ${STATUS_TIMEOUT_S:-2.0}
     ports:
       - "28080:8080"
     volumes:
       - mission_map_data:/var/lib/peacekeeper/maps
+      - mission_evidence_data:/var/lib/peacekeeper/evidence
       - ./configs/fleet/cars.yaml:/app/config/cars.yaml:ro
     depends_on:
       postgres:
@@ -66,3 +68,4 @@ services:
 volumes:
   mission_pg_data:
   mission_map_data:
+  mission_evidence_data:

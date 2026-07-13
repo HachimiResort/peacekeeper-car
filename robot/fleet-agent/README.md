@@ -147,6 +147,12 @@ POST /api/patrol/pause
 POST /api/patrol/resume
 POST /api/patrol/cancel
 
+GET  /api/hazards/status
+POST /api/hazards/monitor
+POST /api/hazards/{event_key}/hold
+POST /api/hazards/{event_key}/takeover
+POST /api/hazards/{event_key}/resume
+
 POST /api/tracking/laser/start
 POST /api/tracking/laser/stop
 
@@ -187,6 +193,21 @@ Inline patrol request:
 5. Click `Save Map`.
 6. Save a snapshot.
 7. Press `Emergency Stop` and verify the car stops.
+
+## Hazard patrol loop
+
+Configure `hazards.robot_id`, `hazards.mission_api_url`, and the shared token
+before deployment. The Mission API URL must be reachable from the car (for
+example `http://<server>:28080`). Publish a calibrated `base_link ->
+camera_link` transform for target map coordinates. Missing camera TF never
+blocks a confirmed stop, but the target map position is reported as unknown.
+
+Monitoring starts only after `POST /api/hazards/monitor {"enabled": true}` and
+continues without an open browser. Three confirmed calibrated measurements in
+five observations inside 1.5 m pause patrol and enter `HAZARD_HOLD`. Evidence
+is written under `data/evidence`, queued under `data/outbox`, and retried until
+the center accepts it. Do not use the generic patrol resume endpoint while a
+hazard hold is active.
 
 ## Verification Without Hardware
 

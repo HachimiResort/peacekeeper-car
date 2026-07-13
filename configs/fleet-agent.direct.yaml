@@ -21,6 +21,7 @@ ros:
   odom_frame: odom
   base_frame: base_footprint
   base_link_frame: base_link
+  camera_frame: camera_link
   publish_odom: true
   publish_tf: true
   odom_period_s: 0.05
@@ -52,6 +53,22 @@ vision:
     - cat
   worker_url: http://127.0.0.1:8092
   worker_timeout_s: 20.0
+  monitor_fps: 2.0
+  stream_fps: 5.0
+
+hazards:
+  enabled: true
+  confidence: 0.5
+  confirmation_window: 5
+  confirmation_hits: 3
+  stop_distance_m: 1.5
+  clear_after_s: 10
+  cooldown_s: 30
+  evidence_max_bytes: 2147483648
+  robot_id: car_1
+  # Set this to the Mission API address reachable from the car before deployment.
+  mission_api_url: ""
+  mission_api_token: ""
 
 processes:
   chassis:

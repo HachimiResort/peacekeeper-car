@@ -11,12 +11,34 @@ export type VisionDetection = GeneratedVisionDetection & {
   bearing_deg?: number | null
   range_m?: number | null
   range_source?: string | null
+  range_quality?: string | null
+  measurement_age_ms?: number | null
+  measurement_timestamp?: number | null
+  measurement_angle_deg?: number | null
+  robot_pose_map?: { x: number; y: number; yaw?: number | null } | null
+  target_pose_map?: { x: number; y: number; yaw?: number | null } | null
+  localization_valid?: boolean
 }
 
 export interface VisionRangeSummary {
   measured_count: number
   total_count: number
   sources: string[]
+}
+
+export interface HazardStatus {
+  enabled: boolean
+  state: string
+  current_event_key: string | null
+  current_detection: VisionDetection | null
+  confirmation_hits: number
+  confirmation_window: number
+  hold_started_at: number | null
+  auto_resume_remaining_s: number | null
+  takeover: boolean
+  hold_requested: boolean
+  last_error: string | null
+  outbox?: { pending: number; mission_api_configured: boolean; last_error: string | null }
 }
 
 export type VisionCapture = Omit<GeneratedVisionCapture, "detections"> & {
@@ -48,6 +70,7 @@ export interface Mission extends Omit<Schemas["MissionResponse"], "robot_id" | "
 }
 
 export interface RobotEvent extends Omit<Schemas["EventResponse"], "mission_id" | "payload" | "occurred_at" | "received_at"> {
+  event_key: string
   mission_id: string | null
   payload: JsonObject
   occurred_at: string | null
@@ -58,6 +81,7 @@ export interface AlertRecord extends Omit<Schemas["AlertResponse"], "confirmed_b
   confirmed_by: string | null
   confirmed_at: string | null
   resolution: string | null
+  action?: string | null
   event: RobotEvent
 }
 
@@ -95,10 +119,11 @@ export interface MapPoint {
 }
 
 export interface RuntimeStatusMessage {
-  type: "snapshot" | "robot_status"
+  type: "snapshot" | "robot_status" | "hazard_event"
   robots?: Record<string, JsonObject>
   robot_id?: string
   data?: JsonObject
+  event?: RobotEvent
 }
 
 export interface NavigationPose {
@@ -167,6 +192,10 @@ export interface MissionApi {
   visionLatest(robotId: string): Promise<VisionCapture>
   visionLatestImage(robotId: string): Promise<Blob>
   visionStreamUrl(robotId: string): string
+  hazardStatus(robotId: string): Promise<HazardStatus>
+  setHazardMonitor(robotId: string, enabled: boolean): Promise<JsonObject>
+  hazardAction(robotId: string, eventKey: string, action: "takeover" | "resume" | "hold", payload?: JsonObject): Promise<JsonObject>
+  eventEvidenceUrl(eventId: string, kind: "raw" | "annotated" | "metadata"): string
   mapDownload(id: string): Promise<Blob>
   uploadMap(file: File, logicalName?: string): Promise<JsonObject>
   importMap(payload: { robot_id: string; map_name: string; logical_name?: string }): Promise<JsonObject>
@@ -175,6 +204,6 @@ export interface MissionApi {
   missions(filters?: Record<string, string>): Promise<Page<Mission>>
   events(filters?: Record<string, string>): Promise<Page<RobotEvent>>
   alerts(filters?: Record<string, string>): Promise<Page<AlertRecord>>
-  confirmAlert(id: string, confirmedBy: string, resolution?: string): Promise<JsonObject>
+  confirmAlert(id: string, confirmedBy: string, resolution?: string, action?: "acknowledge" | "takeover" | "false_positive" | "resolved"): Promise<JsonObject>
   subscribeStatus(listener: (message: RuntimeStatusMessage) => void, observer?: StatusSubscriptionObserver): () => void
 }

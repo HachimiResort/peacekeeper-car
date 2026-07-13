@@ -574,6 +574,7 @@ class CoreTests(unittest.TestCase):
         )
         self.assertEqual(payload["detections"][0]["range_source"], "depth_camera")
         self.assertAlmostEqual(payload["detections"][0]["range_m"], 1.5, places=3)
+        self.assertEqual(payload["detections"][0]["range_quality"], "calibrated")
 
         estimator._depth = None
         payload = estimator.enrich(
@@ -642,11 +643,12 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(payload["detections"][0]["range_source"], "lidar")
         self.assertAlmostEqual(payload["detections"][0]["range_m"], expected_range, places=3)
+        self.assertEqual(payload["detections"][0]["range_quality"], "fallback")
 
     def test_vision_config_is_present_in_serialized_agent_config(self):
         config = AgentConfig(vision=VisionConfig(enabled=True, target_labels=["cat", "person"]))
 
-        self.assertEqual(_to_dict(config)["vision"], {"enabled": True, "engine_path": "", "confidence": 0.4, "imgsz": 640, "target_labels": ["cat", "person"], "worker_url": "", "worker_timeout_s": 5.0})
+        self.assertEqual(_to_dict(config)["vision"], {"enabled": True, "engine_path": "", "confidence": 0.4, "imgsz": 640, "target_labels": ["cat", "person"], "worker_url": "", "worker_timeout_s": 5.0, "monitor_fps": 2.0, "stream_fps": 5.0})
 
     def test_vision_worker_rejects_non_loopback_bind_addresses(self):
         config = VisionConfig(enabled=True, engine_path="/models/yolov8n.engine")

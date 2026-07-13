@@ -1,14 +1,16 @@
 import asyncio
+import hashlib
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..dependencies import get_session
 from ..errors import ApiError
-from ..models import Alert, Event, MapDeployment, Mission, Robot, StoredMap
+from ..models import Alert, Event, EventEvidence, MapDeployment, Mission, Robot, StoredMap
 from ..repositories import RobotRepository
 from ..schemas import AlertConfirmRequest, AlertListResponse, DeploymentListResponse, EventListResponse, MissionListResponse, MissionResponse, OverviewResponse, RobotEventRequest
 from ..views import alert_view, deployment_view, event_view, mission_view
@@ -162,10 +164,20 @@ async def list_map_deployments(
 
 
 @router.post("/internal/robot-events", status_code=201)
-async def create_event(payload: RobotEventRequest, session: AsyncSession = Depends(get_session)):
+async def create_event(payload: RobotEventRequest, request: Request, session: AsyncSession = Depends(get_session)):
     if await session.get(Robot, payload.robot_id) is None:
         raise ApiError(404, "robot_not_found", f"Robot '{payload.robot_id}' was not found")
+    existing = await session.scalar(select(Event).where(Event.event_key == payload.event_key))
+    if existing is not None:
+        if existing.robot_id != payload.robot_id:
+            raise ApiError(409, "event_key_conflict", "Event key already belongs to another robot")
+        alert = await session.scalar(select(Alert).where(Alert.event_id == existing.id))
+        result = {"event": event_view(existing), "idempotent": True}
+        if alert is not None:
+            result["alert"] = alert_view(alert)
+        return result
     value = Event(
+        event_key=payload.event_key,
         robot_id=payload.robot_id,
         mission_id=payload.mission_id,
         event_type=payload.event_type,
@@ -185,7 +197,66 @@ async def create_event(payload: RobotEventRequest, session: AsyncSession = Depen
     if alert is not None:
         await session.refresh(alert)
         result["alert"] = alert_view(alert)
+    await request.app.state.ws_hub.publish({"type": "hazard_event", "event": result["event"], "alert": result.get("alert")})
     return result
+
+
+@router.post("/internal/robot-events/{event_key}/evidence", status_code=201)
+async def upload_event_evidence(
+    event_key: str,
+    request: Request,
+    kind: str = Form(..., pattern="^(raw|annotated|metadata)$"),
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+):
+    event = await session.scalar(select(Event).where(Event.event_key == event_key))
+    if event is None:
+        raise ApiError(404, "event_not_found", "Event was not found")
+    maximum = request.app.state.settings.max_evidence_bytes
+    body = await file.read(maximum + 1)
+    if len(body) > maximum:
+        raise ApiError(413, "evidence_too_large", "Evidence file exceeds configured limit")
+    digest = hashlib.sha256(body).hexdigest()
+    suffix = ".jpg" if kind in {"raw", "annotated"} else ".json"
+    storage_key = f"{event_key}/{kind}{suffix}"
+    target = request.app.state.settings.evidence_storage_dir / storage_key
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.with_suffix(target.suffix + ".tmp")
+    staging.write_bytes(body)
+    staging.replace(target)
+    value = await session.scalar(
+        select(EventEvidence).where(EventEvidence.event_id == event.id, EventEvidence.kind == kind)
+    )
+    if value is None:
+        value = EventEvidence(event_id=event.id, kind=kind, storage_key=storage_key)
+        session.add(value)
+    value.storage_key = storage_key
+    value.sha256 = digest
+    value.size_bytes = len(body)
+    value.content_type = file.content_type or ("image/jpeg" if suffix == ".jpg" else "application/json")
+    await session.commit()
+    await session.refresh(value)
+    return {
+        "id": str(value.id),
+        "event_id": str(value.event_id),
+        "kind": value.kind,
+        "sha256": value.sha256,
+        "size_bytes": value.size_bytes,
+        "content_type": value.content_type,
+    }
+
+
+@router.get("/api/events/{event_id}/evidence/{kind}")
+async def get_event_evidence(event_id: uuid.UUID, kind: str, request: Request, session: AsyncSession = Depends(get_session)):
+    value = await session.scalar(
+        select(EventEvidence).where(EventEvidence.event_id == event_id, EventEvidence.kind == kind)
+    )
+    if value is None:
+        raise ApiError(404, "evidence_not_found", "Event evidence was not found")
+    path = request.app.state.settings.evidence_storage_dir / value.storage_key
+    if not path.is_file():
+        raise ApiError(404, "evidence_file_missing", "Event evidence file is missing")
+    return FileResponse(path, media_type=value.content_type, headers={"Cache-Control": "private, no-store"})
 
 
 @router.post("/api/alerts/{alert_id}/confirm")
@@ -195,10 +266,11 @@ async def confirm_alert(alert_id: uuid.UUID, payload: AlertConfirmRequest, sessi
         raise ApiError(404, "alert_not_found", "Alert was not found")
     if alert.state != "pending":
         raise ApiError(409, "alert_already_handled", f"Alert is already {alert.state}")
-    alert.state = "confirmed"
+    alert.state = "resolved" if payload.action in {"false_positive", "resolved"} else "confirmed"
     alert.confirmed_by = payload.confirmed_by
     alert.confirmed_at = datetime.now(timezone.utc)
     alert.resolution = payload.resolution
+    alert.action = payload.action
     await session.commit()
     return alert_view(alert)
 

@@ -17,7 +17,7 @@ COPY docker-entrypoint.sh /app/
 RUN sed -i 's/\r$//' /app/docker-entrypoint.sh \
     && pip install --no-cache-dir . \
     && chmod +x /app/docker-entrypoint.sh \
-    && mkdir -p /var/lib/peacekeeper/maps /app/config \
+    && mkdir -p /var/lib/peacekeeper/maps /var/lib/peacekeeper/evidence /app/config \
     && chown -R peacekeeper:peacekeeper /var/lib/peacekeeper /app
 
 USER peacekeeper

@@ -15,6 +15,7 @@ import type {
   VehicleSavedMap,
   VisionCapture,
   VisionStatus,
+  HazardStatus,
 } from "./types"
 
 export class ApiError extends Error {
@@ -103,6 +104,16 @@ export class HttpMissionApi implements MissionApi {
   visionStreamUrl(robotId: string) {
     return `/api/robots/${encodeURIComponent(robotId)}/vision/stream.mjpg?token=${encodeURIComponent(this.token)}`
   }
+  async hazardStatus(robotId: string) { return this.request<HazardStatus>(`/api/robots/${encodeURIComponent(robotId)}/hazards/status`) }
+  async setHazardMonitor(robotId: string, enabled: boolean) {
+    return this.request<JsonObject>(`/api/robots/${encodeURIComponent(robotId)}/hazards/monitor`, { method: "POST", body: JSON.stringify({ enabled }) })
+  }
+  async hazardAction(robotId: string, eventKey: string, action: "takeover" | "resume" | "hold", payload: JsonObject = {}) {
+    return this.request<JsonObject>(`/api/robots/${encodeURIComponent(robotId)}/hazards/${encodeURIComponent(eventKey)}/${action}`, { method: "POST", body: JSON.stringify(action === "hold" ? { hold: true, ...payload } : payload) })
+  }
+  eventEvidenceUrl(eventId: string, kind: "raw" | "annotated" | "metadata") {
+    return `/api/events/${encodeURIComponent(eventId)}/evidence/${kind}?token=${encodeURIComponent(this.token)}`
+  }
   async mapDownload(id: string) { return this.blob(`/api/maps/${id}/download`) }
   async uploadMap(file: File, logicalName?: string) {
     const form = new FormData()
@@ -131,8 +142,8 @@ export class HttpMissionApi implements MissionApi {
     const data = await this.request<{ alerts: AlertRecord[]; total: number; limit: number; offset: number }>(`/api/alerts${query(filters)}`)
     return { items: data.alerts, total: data.total, limit: data.limit, offset: data.offset }
   }
-  async confirmAlert(id: string, confirmedBy: string, resolution?: string) {
-    return this.request<JsonObject>(`/api/alerts/${id}/confirm`, { method: "POST", body: JSON.stringify({ confirmed_by: confirmedBy, resolution: resolution || null }) })
+  async confirmAlert(id: string, confirmedBy: string, resolution?: string, action: "acknowledge" | "takeover" | "false_positive" | "resolved" = "acknowledge") {
+    return this.request<JsonObject>(`/api/alerts/${id}/confirm`, { method: "POST", body: JSON.stringify({ confirmed_by: confirmedBy, resolution: resolution || null, action }) })
   }
 
   subscribeStatus(listener: (message: RuntimeStatusMessage) => void, observer: StatusSubscriptionObserver = {}) {

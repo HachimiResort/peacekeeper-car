@@ -30,6 +30,7 @@ export function LiveStatusProvider({ children }: { children: ReactNode }) {
         setStatuses((current) => ({ ...current, [message.robot_id!]: message.data! }))
         setLastUpdatedAt((current) => ({ ...current, [message.robot_id!]: now }))
       }
+      if (message.type === "hazard_event") window.dispatchEvent(new CustomEvent("peacekeeper:hazard-event", { detail: message }))
     }, {
       onOpen: () => { setConnected(true); setLastError(null) },
       onClose: () => setConnected(false),

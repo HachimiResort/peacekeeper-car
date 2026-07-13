@@ -18,6 +18,7 @@ export function EventsPage() {
   const [selectedEvent, setSelectedEvent] = useState<RobotEvent | null>(null)
   const [selectedAlert, setSelectedAlert] = useState<AlertRecord | null>(null)
   const [resolution, setResolution] = useState("")
+  const [resolutionAction, setResolutionAction] = useState<"acknowledge" | "takeover" | "false_positive" | "resolved">("acknowledge")
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState("")
   const [confirming, setConfirming] = useState(false)
@@ -40,15 +41,23 @@ export function EventsPage() {
   }
 
   useEffect(() => { load() }, [api, robotId, severity, alertState])
+  useEffect(() => { const refresh = () => load(); window.addEventListener("peacekeeper:hazard-event", refresh); return () => window.removeEventListener("peacekeeper:hazard-event", refresh) }, [api, robotId, severity, alertState])
 
   const confirm = async (event: FormEvent) => {
     event.preventDefault()
     if (!api || !selectedAlert || confirming) return
     setConfirming(true); setConfirmError("")
     try {
-      await api.confirmAlert(selectedAlert.id, operatorName, resolution)
+      if (resolutionAction === "takeover") await api.hazardAction(selectedAlert.event.robot_id, selectedAlert.event.event_key, "takeover")
+      if (resolutionAction === "false_positive" || resolutionAction === "resolved") {
+        const hazard = await api.hazardStatus(selectedAlert.event.robot_id)
+        if (hazard.current_event_key === selectedAlert.event.event_key) {
+          await api.hazardAction(selectedAlert.event.robot_id, selectedAlert.event.event_key, "resume")
+        }
+      }
+      await api.confirmAlert(selectedAlert.id, operatorName, resolution, resolutionAction)
       feedback.notify({ title: "告警处置已确认并留档", description: selectedAlert.event.event_type, tone: "success" })
-      setSelectedAlert(null); setResolution(""); load()
+      setSelectedAlert(null); setResolution(""); setResolutionAction("acknowledge"); load()
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "告警确认失败"
       setConfirmError(message); feedback.notify({ title: "告警确认失败", description: message, tone: "error" })
@@ -82,11 +91,19 @@ export function EventsPage() {
         {!alerts ? <LoadingBlock /> : alerts.length === 0 ? <EmptyState title="告警队列为空" detail="没有匹配的待处理风险" /> : <section className="alert-grid">{alerts.map((alert) => <Card className="alert-card" key={alert.id}><div className="alert-card-icon"><AlertTriangle /></div><div><Badge tone={alert.state === "pending" ? "warning" : "success"}>{alert.state}</Badge><h2>{alert.event.event_type}</h2><p>{alert.event.robot_id} · {alert.event.severity}</p><time>{formatDate(alert.event.occurred_at)}</time></div>{alert.state === "pending" ? <Button variant="warning" onClick={() => { setConfirmError(""); setSelectedAlert(alert) }}>确认处置</Button> : <div className="resolved-by">{alert.confirmed_by}<small>{alert.resolution || "已确认"}</small></div>}</Card>)}</section>}
       </Tabs.Panel>
     </Tabs.Root>
-    <Modal open={Boolean(selectedEvent)} title={selectedEvent?.event_type || "事件详情"} onClose={() => setSelectedEvent(null)}><JsonPanel value={selectedEvent} /></Modal>
+    <Modal open={Boolean(selectedEvent)} title={selectedEvent?.event_type || "事件详情"} onClose={() => setSelectedEvent(null)}>{selectedEvent?.event_type === "hazard_detected" && api && <HazardEvidence api={api} event={selectedEvent} />}<JsonPanel value={selectedEvent} /></Modal>
     <Modal open={Boolean(selectedAlert)} busy={confirming} title="确认告警处置" onClose={() => setSelectedAlert(null)} footer={<><Button onClick={() => setSelectedAlert(null)} disabled={confirming}>取消</Button><Button variant="warning" type="submit" form="confirm-alert" loading={confirming} loadingText="正在留档">确认并留档</Button></>}>
-      <form id="confirm-alert" className="form-stack" onSubmit={confirm}><div className="operator-line">确认人：<strong>{operatorName}</strong></div><label><span>处置结果</span><textarea className={fieldClass} rows={4} value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="例如：现场复核无明火，已恢复巡护" /></label>{confirmError && <div className="form-error" role="alert">{confirmError}</div>}</form>
+      {selectedAlert?.event.event_type === "hazard_detected" && api && <HazardEvidence api={api} event={selectedAlert.event} />}
+      <form id="confirm-alert" className="form-stack" onSubmit={confirm}><div className="operator-line">确认人：<strong>{operatorName}</strong></div><label><span>处置动作</span><select className={fieldClass} value={resolutionAction} onChange={(event) => setResolutionAction(event.target.value as typeof resolutionAction)}><option value="acknowledge">确认告警，保持当前状态</option><option value="takeover">接管车辆</option><option value="false_positive">标记误报并尝试恢复</option><option value="resolved">处置完成并尝试恢复</option></select></label><label><span>处置结果</span><textarea className={fieldClass} rows={4} value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="例如：现场复核后已清除隐患" /></label>{confirmError && <div className="form-error" role="alert">{confirmError}</div>}</form>
     </Modal>
   </div>
+}
+
+function HazardEvidence({ api, event }: { api: NonNullable<ReturnType<typeof useSession>["api"]>; event: RobotEvent }) {
+  const observation = (event.payload.observation || {}) as Record<string, unknown>
+  const detection = (event.payload.trigger_detection || {}) as Record<string, unknown>
+  const target = (detection.target_pose_map || {}) as Record<string, unknown>
+  return <section className="event-evidence"><img src={api.eventEvidenceUrl(event.id, "annotated")} alt="隐患识别证据" /><div><strong>{String(detection.label || "隐患")}</strong><span>置信度 {Math.round(Number(detection.confidence || 0) * 100)}%</span><span>距离 {detection.range_m == null ? "未知" : `${Number(detection.range_m).toFixed(2)} m`}</span><span>{detection.localization_valid ? `地图 x ${Number(target.x).toFixed(2)} / y ${Number(target.y).toFixed(2)}` : "目标位置未确认"}</span><small>{String(observation.model || "")}</small></div></section>
 }
 
 function tone(value: string): "neutral" | "warning" | "danger" {

@@ -10,6 +10,7 @@ import { MotionCommander } from "../api/motion"
 import type { MapDeployment, MapPoint, Robot, StoredMap } from "../api/types"
 import { CameraPreview } from "../components/camera-preview"
 import { LiveMapPreview } from "../components/live-map-preview"
+import { HazardPanel } from "../components/hazard-panel"
 import { MapCanvas } from "../components/map-canvas"
 import { VisionDetectionCard } from "../components/vision-detection-card"
 import { Badge, Button, Card, EmptyState, InlineActionStatus, JsonPanel, LoadingBlock, PageHeader, StatusDot, fieldClass } from "../components/ui"
@@ -232,6 +233,8 @@ export function RobotDetailPage() {
       </Card>
 
       <VisionDetectionCard api={api!} robotId={robotId} available={cameraAvailable} />
+
+      <HazardPanel api={api!} robotId={robotId} available={cameraAvailable} map={selectedMap} />
 
       <Card className="panel span-2">
         <div className="panel-head"><div><h2>地图定位与导航</h2><p>只显示已安装到本车的不可变地图版本</p></div><Crosshair /></div>

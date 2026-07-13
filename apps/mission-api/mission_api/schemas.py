@@ -54,6 +54,12 @@ class VisionBoundingBox(BaseModel):
     height: float
 
 
+class MapPose(BaseModel):
+    x: float
+    y: float
+    yaw: Optional[float] = None
+
+
 class VisionDetection(BaseModel):
     label: str
     confidence: float = Field(ge=0.0, le=1.0)
@@ -61,6 +67,13 @@ class VisionDetection(BaseModel):
     bearing_deg: Optional[float] = None
     range_m: Optional[float] = Field(default=None, ge=0.0)
     range_source: Optional[str] = None
+    range_quality: Optional[str] = None
+    measurement_age_ms: Optional[float] = None
+    measurement_timestamp: Optional[float] = None
+    measurement_angle_deg: Optional[float] = None
+    robot_pose_map: Optional[MapPose] = None
+    target_pose_map: Optional[MapPose] = None
+    localization_valid: bool = False
 
 
 class VisionTrigger(BaseModel):
@@ -86,6 +99,7 @@ class VisionCaptureResponse(BaseModel):
     captured_at: float = Field(ge=0.0)
     annotated_image_available: bool = True
     range_measurements: Optional[VisionRangeSummary] = None
+    observation_id: Optional[str] = None
 
 
 class VisionStatusResponse(BaseModel):
@@ -128,7 +142,16 @@ class PatrolRequest(BaseModel):
     points: list[PatrolPoint] = Field(default_factory=list)
 
 
+class HazardMonitorRequest(BaseModel):
+    enabled: bool
+
+
+class HazardHoldRequest(BaseModel):
+    hold: bool = True
+
+
 class RobotEventRequest(BaseModel):
+    event_key: str = Field(default_factory=lambda: str(uuid.uuid4()), min_length=1, max_length=64)
     robot_id: str
     mission_id: Optional[uuid.UUID] = None
     event_type: str = Field(min_length=1, max_length=64)
@@ -141,6 +164,7 @@ class RobotEventRequest(BaseModel):
 class AlertConfirmRequest(BaseModel):
     confirmed_by: str = Field(min_length=1, max_length=128)
     resolution: Optional[str] = None
+    action: str = Field(default="acknowledge", pattern="^(acknowledge|takeover|false_positive|resolved)$")
 
 
 class MapImportRequest(BaseModel):
@@ -192,6 +216,7 @@ class MissionListResponse(BaseModel):
 
 class EventResponse(BaseModel):
     id: str
+    event_key: str
     robot_id: str
     mission_id: Optional[str] = None
     event_type: str
@@ -215,6 +240,7 @@ class AlertResponse(BaseModel):
     confirmed_by: Optional[str] = None
     confirmed_at: Optional[str] = None
     resolution: Optional[str] = None
+    action: Optional[str] = None
     event: EventResponse
 
 

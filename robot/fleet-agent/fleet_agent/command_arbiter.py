@@ -45,6 +45,9 @@ class CommandArbiter:
         if self.state.estop:
             return self._reject("manual", "ESTOP is active")
 
+        if self.state.mode == Mode.HAZARD_HOLD and not self._is_zero(linear_x, linear_y, angular_z):
+            return self._reject("manual", "Hazard hold is active; take over the hazard before moving")
+
         zero = self._is_zero(linear_x, linear_y, angular_z)
         if self.state.mode == Mode.LASER_TRACKING and not zero:
             return self._reject("manual", "Laser tracking is active; stop tracking before manual control")

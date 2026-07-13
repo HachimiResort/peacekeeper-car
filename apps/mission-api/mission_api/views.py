@@ -39,6 +39,7 @@ def mission_view(value: Mission) -> dict:
 def event_view(value: Event) -> dict:
     return {
         "id": str(value.id),
+        "event_key": value.event_key,
         "robot_id": value.robot_id,
         "mission_id": str(value.mission_id) if value.mission_id else None,
         "event_type": value.event_type,
@@ -57,6 +58,7 @@ def alert_view(value: Alert) -> dict:
         "confirmed_by": value.confirmed_by,
         "confirmed_at": _iso(value.confirmed_at),
         "resolution": value.resolution,
+        "action": value.action,
     }
 
 

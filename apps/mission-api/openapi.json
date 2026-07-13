@@ -1768,6 +1768,403 @@
         }
       }
     },
+    "/api/robots/{robot_id}/hazards/status": {
+      "get": {
+        "tags": [
+          "robots"
+        ],
+        "summary": "Hazard Status",
+        "operationId": "hazard_status_api_robots__robot_id__hazards_status_get",
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Robot Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid shared token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation conflicts with current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected service error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/robots/{robot_id}/hazards/monitor": {
+      "post": {
+        "tags": [
+          "robots"
+        ],
+        "summary": "Hazard Monitor",
+        "operationId": "hazard_monitor_api_robots__robot_id__hazards_monitor_post",
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Robot Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HazardMonitorRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid shared token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation conflicts with current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected service error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/robots/{robot_id}/hazards/{event_key}/takeover": {
+      "post": {
+        "tags": [
+          "robots"
+        ],
+        "summary": "Hazard Takeover",
+        "operationId": "hazard_takeover_api_robots__robot_id__hazards__event_key__takeover_post",
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Robot Id"
+            }
+          },
+          {
+            "name": "event_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid shared token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation conflicts with current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected service error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/robots/{robot_id}/hazards/{event_key}/hold": {
+      "post": {
+        "tags": [
+          "robots"
+        ],
+        "summary": "Hazard Hold",
+        "operationId": "hazard_hold_api_robots__robot_id__hazards__event_key__hold_post",
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Robot Id"
+            }
+          },
+          {
+            "name": "event_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HazardHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid shared token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation conflicts with current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected service error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/robots/{robot_id}/hazards/{event_key}/resume": {
+      "post": {
+        "tags": [
+          "robots"
+        ],
+        "summary": "Hazard Resume",
+        "operationId": "hazard_resume_api_robots__robot_id__hazards__event_key__resume_post",
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Robot Id"
+            }
+          },
+          {
+            "name": "event_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid shared token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation conflicts with current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected service error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/robots/{robot_id}/navigation/start": {
       "post": {
         "tags": [
@@ -3162,6 +3559,166 @@
         }
       }
     },
+    "/internal/robot-events/{event_key}/evidence": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Upload Event Evidence",
+        "operationId": "upload_event_evidence_internal_robot_events__event_key__evidence_post",
+        "parameters": [
+          {
+            "name": "event_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_event_evidence_internal_robot_events__event_key__evidence_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid shared token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation conflicts with current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected service error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events/{event_id}/evidence/{kind}": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Get Event Evidence",
+        "operationId": "get_event_evidence_api_events__event_id__evidence__kind__get",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Event Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid shared token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation conflicts with current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected service error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/alerts/{alert_id}/confirm": {
       "post": {
         "tags": [
@@ -3836,6 +4393,12 @@
               }
             ],
             "title": "Resolution"
+          },
+          "action": {
+            "type": "string",
+            "pattern": "^(acknowledge|takeover|false_positive|resolved)$",
+            "title": "Action",
+            "default": "acknowledge"
           }
         },
         "type": "object",
@@ -3922,6 +4485,17 @@
             ],
             "title": "Resolution"
           },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
           "event": {
             "$ref": "#/components/schemas/EventResponse"
           }
@@ -3934,6 +4508,26 @@
           "event"
         ],
         "title": "AlertResponse"
+      },
+      "Body_upload_event_evidence_internal_robot_events__event_key__evidence_post": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "pattern": "^(raw|annotated|metadata)$",
+            "title": "Kind"
+          },
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "file"
+        ],
+        "title": "Body_upload_event_evidence_internal_robot_events__event_key__evidence_post"
       },
       "Body_upload_map_api_maps_upload_post": {
         "properties": {
@@ -4156,6 +4750,10 @@
             "type": "string",
             "title": "Id"
           },
+          "event_key": {
+            "type": "string",
+            "title": "Event Key"
+          },
           "robot_id": {
             "type": "string",
             "title": "Robot Id"
@@ -4210,12 +4808,37 @@
         "type": "object",
         "required": [
           "id",
+          "event_key",
           "robot_id",
           "event_type",
           "severity",
           "payload"
         ],
         "title": "EventResponse"
+      },
+      "HazardHoldRequest": {
+        "properties": {
+          "hold": {
+            "type": "boolean",
+            "title": "Hold",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "HazardHoldRequest"
+      },
+      "HazardMonitorRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "HazardMonitorRequest"
       },
       "ManualCommand": {
         "properties": {
@@ -4329,6 +4952,35 @@
           "map_name"
         ],
         "title": "MapNameRequest"
+      },
+      "MapPose": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "title": "Y"
+          },
+          "yaw": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yaw"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "MapPose"
       },
       "MapResponse": {
         "properties": {
@@ -4766,6 +5418,12 @@
       },
       "RobotEventRequest": {
         "properties": {
+          "event_key": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Event Key"
+          },
           "robot_id": {
             "type": "string",
             "title": "Robot Id"
@@ -5075,6 +5733,17 @@
                 "type": "null"
               }
             ]
+          },
+          "observation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Id"
           }
         },
         "type": "object",
@@ -5135,6 +5804,75 @@
               }
             ],
             "title": "Range Source"
+          },
+          "range_quality": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Quality"
+          },
+          "measurement_age_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measurement Age Ms"
+          },
+          "measurement_timestamp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measurement Timestamp"
+          },
+          "measurement_angle_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measurement Angle Deg"
+          },
+          "robot_pose_map": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MapPose"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_pose_map": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MapPose"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "localization_valid": {
+            "type": "boolean",
+            "title": "Localization Valid",
+            "default": false
           }
         },
         "type": "object",

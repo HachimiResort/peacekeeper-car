@@ -22,6 +22,12 @@ def test_management_routes_and_response_models_are_in_openapi():
     assert "/api/robots/{robot_id}/vision/latest" in schema["paths"]
     assert "/api/robots/{robot_id}/vision/latest.jpg" in schema["paths"]
     assert "/api/robots/{robot_id}/vision/stream.mjpg" in schema["paths"]
+    assert "/api/robots/{robot_id}/hazards/status" in schema["paths"]
+    assert "/api/robots/{robot_id}/hazards/monitor" in schema["paths"]
+    assert "/api/robots/{robot_id}/hazards/{event_key}/takeover" in schema["paths"]
+    assert "/api/robots/{robot_id}/hazards/{event_key}/resume" in schema["paths"]
+    assert "/internal/robot-events/{event_key}/evidence" in schema["paths"]
+    assert "/api/events/{event_id}/evidence/{kind}" in schema["paths"]
     assert schema["paths"]["/api/missions"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("MissionListResponse")
     assert "VisionCaptureResponse" in schema["components"]["schemas"]
     assert "VisionStatusResponse" in schema["components"]["schemas"]

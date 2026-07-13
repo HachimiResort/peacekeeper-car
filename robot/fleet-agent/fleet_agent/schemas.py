@@ -46,6 +46,14 @@ class PatrolStartRequest(BaseModel):
     points: List[PatrolPointRequest] = Field(default_factory=list)
 
 
+class HazardMonitorRequest(BaseModel):
+    enabled: bool
+
+
+class HazardHoldRequest(BaseModel):
+    hold: bool = True
+
+
 class SnapshotResponse(BaseModel):
     ok: bool
     path: Optional[str] = None

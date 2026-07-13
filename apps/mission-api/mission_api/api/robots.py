@@ -13,6 +13,8 @@ from ..schemas import (
     ManualCommand,
     MapNameRequest,
     MapSaveRequest,
+    HazardHoldRequest,
+    HazardMonitorRequest,
     PatrolRequest,
     PoseRequest,
     RobotCreate,
@@ -294,6 +296,34 @@ async def vision_stream(robot_id: str, request: Request, session: AsyncSession =
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/{robot_id}/hazards/status")
+async def hazard_status(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    return await request.app.state.agent_client.request(robot, "GET", "/api/hazards/status")
+
+
+@router.post("/{robot_id}/hazards/monitor")
+async def hazard_monitor(robot_id: str, payload: HazardMonitorRequest, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, "/api/hazards/monitor", payload.model_dump())
+
+
+@router.post("/{robot_id}/hazards/{event_key}/takeover")
+async def hazard_takeover(robot_id: str, event_key: str, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, f"/api/hazards/{event_key}/takeover")
+
+
+@router.post("/{robot_id}/hazards/{event_key}/hold")
+async def hazard_hold(robot_id: str, event_key: str, payload: HazardHoldRequest, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, f"/api/hazards/{event_key}/hold", payload.model_dump())
+
+
+@router.post("/{robot_id}/hazards/{event_key}/resume")
+async def hazard_resume(robot_id: str, event_key: str, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, f"/api/hazards/{event_key}/resume")
 
 
 @router.post("/{robot_id}/navigation/start")

@@ -31,6 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         settings.map_storage_dir.mkdir(parents=True, exist_ok=True)
+        settings.evidence_storage_dir.mkdir(parents=True, exist_ok=True)
         db = Database(settings.database_url)
         agent = FleetAgentClient(
             settings.shared_token,

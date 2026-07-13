@@ -49,6 +49,7 @@ class Event(Base):
     __tablename__ = "events"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     robot_id: Mapped[str] = mapped_column(ForeignKey("robots.id"), index=True)
     mission_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("missions.id"), nullable=True)
     event_type: Mapped[str] = mapped_column(String(64), index=True)
@@ -67,6 +68,21 @@ class Alert(Base):
     confirmed_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    action: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+
+class EventEvidence(Base):
+    __tablename__ = "event_evidence"
+    __table_args__ = (UniqueConstraint("event_id", "kind", name="uq_event_evidence_kind"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    storage_key: Mapped[str] = mapped_column(String(256), unique=True)
+    sha256: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    content_type: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class StoredMap(Base):

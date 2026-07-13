@@ -78,8 +78,9 @@ saving block installation on the vehicle.
 
 ## Persistence And Tests
 
-`mission_pg_data` stores PostgreSQL data and `mission_map_data` stores map
-files. Do not use `docker compose down -v` unless both should be deleted.
+`mission_pg_data` stores PostgreSQL data, `mission_map_data` stores map files,
+and `mission_evidence_data` stores hazard screenshots and metadata. Do not use
+`docker compose down -v` unless all three should be deleted.
 
 ```bash
 python3 -m compileall apps/mission-api/mission_api apps/mission-api/migrations
@@ -87,8 +88,8 @@ docker compose build mission-api
 docker compose up -d
 ```
 
-The initial Alembic migration creates robots, missions, events, alerts, maps,
-and map deployment records. The service reconciles leftover pending/running
+The Alembic migrations create robots, missions, idempotent events, alerts,
+event evidence, maps, and map deployment records. The service reconciles leftover pending/running
 missions to `failed/service_restart` on startup.
 
 This first deployment intentionally has no user accounts, TLS termination,

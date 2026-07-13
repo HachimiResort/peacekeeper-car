@@ -260,12 +260,27 @@ class VisionCaptureService:
         self.worker = worker
         self.range_estimator = range_estimator
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
         self._latest_payload: Optional[Dict[str, Any]] = None
         self._latest_jpeg: Optional[bytes] = None
+        self._latest_source_jpeg: Optional[bytes] = None
+        self._sequence = 0
+        self._monitor_enabled = False
+        self._stream_clients = 0
+        self._producer: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._listeners: List[Callable[[Dict[str, Any]], None]] = []
 
     def capture(self) -> Dict[str, Any]:
         with self._lock:
-            return self._capture_locked()
+            payload = self._capture_locked()
+            listeners = list(self._listeners)
+        for listener in listeners:
+            try:
+                listener(dict(payload))
+            except Exception:
+                pass
+        return payload
 
     def _capture_locked(self) -> Dict[str, Any]:
         frame = self.video.read_frame()
@@ -277,6 +292,7 @@ class VisionCaptureService:
                 raise VisionUnavailable("Could not encode camera frame for vision worker")
             payload, jpeg = self.worker.infer(source_jpeg)
         else:
+            source_jpeg = self.video.encode_jpeg(frame)
             result, annotated_frame = self.vision.analyze(frame)
             jpeg = self.video.encode_jpeg(annotated_frame)
             if jpeg is None:
@@ -284,24 +300,83 @@ class VisionCaptureService:
             payload = result.as_dict()
             payload["captured_at"] = time.time()
             payload["annotated_image_available"] = True
+        payload.setdefault("captured_at", time.time())
         if self.range_estimator is not None:
             payload = self.range_estimator.enrich(payload)
         self._latest_payload = payload
         self._latest_jpeg = jpeg
+        self._latest_source_jpeg = source_jpeg
+        self._sequence += 1
+        self._condition.notify_all()
         return dict(payload)
 
     def mjpeg_frames(self, frame_interval_s: float):
-        frame_interval_s = max(frame_interval_s, 0.03)
-        while True:
-            try:
-                with self._lock:
-                    self._capture_locked()
+        del frame_interval_s
+        with self._condition:
+            self._stream_clients += 1
+            self._ensure_producer_unlocked()
+            sequence = -1
+        try:
+            while True:
+                with self._condition:
+                    self._condition.wait_for(lambda: self._sequence != sequence or self._stop_event.is_set(), timeout=2.0)
+                    if self._stop_event.is_set():
+                        return
+                    sequence = self._sequence
                     jpeg = self._latest_jpeg
                 if jpeg is not None:
                     yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+        finally:
+            with self._condition:
+                self._stream_clients = max(0, self._stream_clients - 1)
+                self._condition.notify_all()
+
+    def set_monitor_enabled(self, enabled: bool) -> Dict[str, Any]:
+        with self._condition:
+            self._monitor_enabled = bool(enabled)
+            if enabled:
+                self._ensure_producer_unlocked()
+            self._condition.notify_all()
+        return self.status()
+
+    def add_listener(self, listener: Callable[[Dict[str, Any]], None]) -> None:
+        with self._lock:
+            self._listeners.append(listener)
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        with self._condition:
+            self._condition.notify_all()
+            producer = self._producer
+        if producer is not None and producer.is_alive():
+            producer.join(timeout=2.0)
+
+    def latest_source_jpeg(self) -> Optional[bytes]:
+        with self._lock:
+            return self._latest_source_jpeg
+
+    def _ensure_producer_unlocked(self) -> None:
+        if self._producer is not None and self._producer.is_alive():
+            return
+        self._stop_event.clear()
+        self._producer = threading.Thread(target=self._produce, name="peacekeeper-vision", daemon=True)
+        self._producer.start()
+
+    def _produce(self) -> None:
+        while not self._stop_event.is_set():
+            with self._condition:
+                monitor = self._monitor_enabled
+                stream_clients = self._stream_clients
+                if not monitor and stream_clients <= 0:
+                    return
+                fps = self.vision.config.stream_fps if stream_clients > 0 else self.vision.config.monitor_fps
+            started = time.monotonic()
+            try:
+                self.capture()
             except VisionUnavailable:
                 pass
-            time.sleep(frame_interval_s)
+            elapsed = time.monotonic() - started
+            self._stop_event.wait(max(0.03, 1.0 / max(float(fps), 0.1) - elapsed))
 
     def latest(self) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -315,6 +390,9 @@ class VisionCaptureService:
         status = self.worker.status() if self.worker is not None else self.vision.status()
         status["last_result"] = dict(self._latest_payload) if self._latest_payload else None
         status["latest_available"] = self._latest_payload is not None
+        status["monitor_enabled"] = self._monitor_enabled
+        status["stream_clients"] = self._stream_clients
+        status["producer_alive"] = bool(self._producer and self._producer.is_alive())
         if self.range_estimator is not None:
             status["range_estimation"] = self.range_estimator.status()
         return status

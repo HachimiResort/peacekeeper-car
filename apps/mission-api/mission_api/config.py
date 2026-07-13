@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     shared_token: str = Field(min_length=8)
     cars_file: Path = Path("/app/config/cars.yaml")
     map_storage_dir: Path = Path("/var/lib/peacekeeper/maps")
+    evidence_storage_dir: Path = Path("/var/lib/peacekeeper/evidence")
     status_poll_s: float = Field(default=1.0, gt=0.1, le=60.0)
     status_timeout_s: float = Field(default=2.0, gt=0.1, le=30.0)
     control_timeout_s: float = Field(default=5.0, gt=0.1, le=60.0)
@@ -19,6 +20,7 @@ class Settings(BaseSettings):
     offline_failures: int = Field(default=3, ge=1, le=20)
     last_seen_flush_s: float = Field(default=30.0, ge=5.0, le=300.0)
     max_map_bytes: int = Field(default=64 * 1024 * 1024, ge=1024 * 1024)
+    max_evidence_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
     max_poll_concurrency: int = Field(default=20, ge=1, le=200)
 
     @property

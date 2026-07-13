@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from .command_arbiter import CommandArbiter
 from .config import AgentConfig
+from .hazard import EventOutbox, EvidenceStore, HazardSupervisor
 from .mapping import MappingService
 from .navigation import NavigationService
 from .patrol import PatrolService
@@ -22,7 +23,7 @@ from .process_manager import ProcessManager
 from .range_estimation import TargetRangeEstimator
 from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from .rosmaster_control import RosmasterController
-from .schemas import CmdVelRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
+from .schemas import CmdVelRequest, HazardHoldRequest, HazardMonitorRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
 from .video import VideoService
 from .vision import VisionCaptureService, VisionService, VisionUnavailable, VisionWorkerClient
@@ -45,6 +46,7 @@ def create_app(config: AgentConfig) -> FastAPI:
     run_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "maps").mkdir(parents=True, exist_ok=True)
     (data_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (data_dir / "evidence").mkdir(parents=True, exist_ok=True)
 
     rosmaster = RosmasterController(config.control, config.safety)
     direct_odom = DirectOdomPublisher(
@@ -84,6 +86,10 @@ def create_app(config: AgentConfig) -> FastAPI:
     range_estimator = TargetRangeEstimator(
         config.ros.scan_topic,
         setup_paths=(config.ros.distro_setup, config.ros.workspace_setup),
+        map_frame=config.ros.map_frame,
+        base_frame=config.ros.base_link_frame,
+        laser_frame=config.ros.laser_frame,
+        camera_frame=config.ros.camera_frame,
     )
     vision_worker = VisionWorkerClient(config.vision) if config.vision.worker_url else None
     vision = VisionService(config.vision)
@@ -102,6 +108,20 @@ def create_app(config: AgentConfig) -> FastAPI:
         before_goal=lambda: cmd_vel.enable_ros_cmd_vel(Mode.NAV_PATROL),
         stop_motion=cmd_vel.stop,
     )
+    evidence_store = EvidenceStore(data_dir, config.hazards.evidence_max_bytes)
+    event_outbox = EventOutbox(data_dir, config.hazards, config.security.shared_token)
+    hazards = HazardSupervisor(
+        config.hazards,
+        state,
+        patrol,
+        navigation,
+        cmd_vel,
+        vision_capture,
+        evidence_store,
+        event_outbox,
+        vision_capture.status,
+    )
+    vision_capture.add_listener(hazards.observe)
 
     templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
@@ -128,9 +148,12 @@ def create_app(config: AgentConfig) -> FastAPI:
                 direct_cmd_vel.start()
             except Exception as exc:
                 state.set_error(f"Direct /cmd_vel subscriber failed: {exc}")
+        event_outbox.start()
         try:
             yield
         finally:
+            event_outbox.shutdown()
+            vision_capture.shutdown()
             patrol.shutdown()
             navigation.shutdown()
             live_map.shutdown()
@@ -188,6 +211,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             "vision": vision_capture.status(),
             "navigation": navigation.status(),
             "patrol": patrol.status(),
+            "hazards": hazards.status(),
             "ros": ros_status,
             "last_error": state.last_error,
             "data_dir": str(data_dir),
@@ -202,6 +226,11 @@ def create_app(config: AgentConfig) -> FastAPI:
         )
 
     async def publish_manual_command(payload: CmdVelRequest):
+        if state.mode == Mode.HAZARD_HOLD and not is_zero_cmd(payload):
+            return JSONResponse(
+                {"ok": False, "message": "Hazard hold is active; use the hazard takeover action first"},
+                status_code=409,
+            )
         if state.mode == Mode.LASER_TRACKING and is_zero_cmd(payload):
             return await stop_laser_tracking()
         if not is_zero_cmd(payload):
@@ -308,6 +337,40 @@ def create_app(config: AgentConfig) -> FastAPI:
             media_type="multipart/x-mixed-replace; boundary=frame",
             headers={"Cache-Control": "no-store, max-age=0", "X-Accel-Buffering": "no"},
         )
+
+    @app.get("/api/hazards/status")
+    async def hazard_status():
+        return JSONResponse(await _run_blocking(hazards.status))
+
+    @app.post("/api/hazards/monitor")
+    async def hazard_monitor(payload: HazardMonitorRequest):
+        if not config.hazards.enabled:
+            return JSONResponse({"ok": False, "message": "Hazard supervision is disabled by configuration"}, status_code=409)
+        try:
+            return JSONResponse({"ok": True, "hazards": await _run_blocking(hazards.set_enabled, payload.enabled)})
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+
+    @app.post("/api/hazards/{event_key}/takeover")
+    async def hazard_takeover(event_key: str):
+        try:
+            return JSONResponse({"ok": True, "hazards": await _run_blocking(hazards.take_over, event_key)})
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+
+    @app.post("/api/hazards/{event_key}/hold")
+    async def hazard_hold(event_key: str, payload: HazardHoldRequest):
+        try:
+            return JSONResponse({"ok": True, "hazards": await _run_blocking(hazards.set_hold, event_key, payload.hold)})
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+
+    @app.post("/api/hazards/{event_key}/resume")
+    async def hazard_resume(event_key: str):
+        try:
+            return JSONResponse({"ok": True, "hazards": await _run_blocking(hazards.resume, event_key)})
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
 
     @app.get("/api/mapping/latest")
     async def mapping_latest(name: Optional[str] = Query(default=None)):
@@ -775,6 +838,11 @@ def create_app(config: AgentConfig) -> FastAPI:
 
     @app.post("/api/patrol/resume")
     async def patrol_resume():
+        if state.mode == Mode.HAZARD_HOLD:
+            return JSONResponse(
+                {"ok": False, "message": "Hazard hold is active; use the hazard resume action"},
+                status_code=409,
+            )
         try:
             return {"ok": True, "patrol": await _run_blocking(patrol.resume)}
         except RuntimeError as exc:

@@ -397,6 +397,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/robots/{robot_id}/hazards/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Hazard Status */
+        get: operations["hazard_status_api_robots__robot_id__hazards_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/robots/{robot_id}/hazards/monitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hazard Monitor */
+        post: operations["hazard_monitor_api_robots__robot_id__hazards_monitor_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/robots/{robot_id}/hazards/{event_key}/takeover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hazard Takeover */
+        post: operations["hazard_takeover_api_robots__robot_id__hazards__event_key__takeover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/robots/{robot_id}/hazards/{event_key}/hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hazard Hold */
+        post: operations["hazard_hold_api_robots__robot_id__hazards__event_key__hold_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/robots/{robot_id}/hazards/{event_key}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hazard Resume */
+        post: operations["hazard_resume_api_robots__robot_id__hazards__event_key__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/robots/{robot_id}/navigation/start": {
         parameters: {
             query?: never;
@@ -669,6 +754,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/robot-events/{event_key}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Event Evidence */
+        post: operations["upload_event_evidence_internal_robot_events__event_key__evidence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/events/{event_id}/evidence/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Event Evidence */
+        get: operations["get_event_evidence_api_events__event_id__evidence__kind__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alerts/{alert_id}/confirm": {
         parameters: {
             query?: never;
@@ -832,6 +951,11 @@ export interface components {
             confirmed_by: string;
             /** Resolution */
             resolution?: string | null;
+            /**
+             * Action
+             * @default acknowledge
+             */
+            action: string;
         };
         /** AlertListResponse */
         AlertListResponse: {
@@ -858,7 +982,16 @@ export interface components {
             confirmed_at?: string | null;
             /** Resolution */
             resolution?: string | null;
+            /** Action */
+            action?: string | null;
             event: components["schemas"]["EventResponse"];
+        };
+        /** Body_upload_event_evidence_internal_robot_events__event_key__evidence_post */
+        Body_upload_event_evidence_internal_robot_events__event_key__evidence_post: {
+            /** Kind */
+            kind: string;
+            /** File */
+            file: string;
         };
         /** Body_upload_map_api_maps_upload_post */
         Body_upload_map_api_maps_upload_post: {
@@ -935,6 +1068,8 @@ export interface components {
         EventResponse: {
             /** Id */
             id: string;
+            /** Event Key */
+            event_key: string;
             /** Robot Id */
             robot_id: string;
             /** Mission Id */
@@ -951,6 +1086,19 @@ export interface components {
             occurred_at?: string | null;
             /** Received At */
             received_at?: string | null;
+        };
+        /** HazardHoldRequest */
+        HazardHoldRequest: {
+            /**
+             * Hold
+             * @default true
+             */
+            hold: boolean;
+        };
+        /** HazardMonitorRequest */
+        HazardMonitorRequest: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** ManualCommand */
         ManualCommand: {
@@ -1003,6 +1151,15 @@ export interface components {
         MapNameRequest: {
             /** Map Name */
             map_name: string;
+        };
+        /** MapPose */
+        MapPose: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+            /** Yaw */
+            yaw?: number | null;
         };
         /** MapResponse */
         MapResponse: {
@@ -1165,6 +1322,8 @@ export interface components {
         };
         /** RobotEventRequest */
         RobotEventRequest: {
+            /** Event Key */
+            event_key?: string;
             /** Robot Id */
             robot_id: string;
             /** Mission Id */
@@ -1285,6 +1444,8 @@ export interface components {
              */
             annotated_image_available: boolean;
             range_measurements?: components["schemas"]["VisionRangeSummary"] | null;
+            /** Observation Id */
+            observation_id?: string | null;
         };
         /** VisionDetection */
         VisionDetection: {
@@ -1299,6 +1460,21 @@ export interface components {
             range_m?: number | null;
             /** Range Source */
             range_source?: string | null;
+            /** Range Quality */
+            range_quality?: string | null;
+            /** Measurement Age Ms */
+            measurement_age_ms?: number | null;
+            /** Measurement Timestamp */
+            measurement_timestamp?: number | null;
+            /** Measurement Angle Deg */
+            measurement_angle_deg?: number | null;
+            robot_pose_map?: components["schemas"]["MapPose"] | null;
+            target_pose_map?: components["schemas"]["MapPose"] | null;
+            /**
+             * Localization Valid
+             * @default false
+             */
+            localization_valid: boolean;
         };
         /** VisionRangeSummary */
         VisionRangeSummary: {
@@ -2804,6 +2980,307 @@ export interface operations {
             };
         };
     };
+    hazard_status_api_robots__robot_id__hazards_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid shared token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Operation conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unexpected service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    hazard_monitor_api_robots__robot_id__hazards_monitor_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HazardMonitorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid shared token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Operation conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unexpected service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    hazard_takeover_api_robots__robot_id__hazards__event_key__takeover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+                event_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid shared token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Operation conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unexpected service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    hazard_hold_api_robots__robot_id__hazards__event_key__hold_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+                event_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HazardHoldRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid shared token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Operation conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unexpected service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    hazard_resume_api_robots__robot_id__hazards__event_key__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+                event_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid shared token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Operation conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unexpected service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     navigation_start_api_robots__robot_id__navigation_start_post: {
         parameters: {
             query?: never;
@@ -3718,6 +4195,127 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid shared token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Operation conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unexpected service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    upload_event_evidence_internal_robot_events__event_key__evidence_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                event_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_event_evidence_internal_robot_events__event_key__evidence_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid shared token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Operation conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unexpected service error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_event_evidence_api_events__event_id__evidence__kind__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                event_id: string;
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

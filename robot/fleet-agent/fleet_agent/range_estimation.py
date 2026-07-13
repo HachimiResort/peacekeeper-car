@@ -5,6 +5,7 @@ import math
 import struct
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from importlib import import_module
 from statistics import median
@@ -16,12 +17,14 @@ rclpy = None
 Image = None
 LaserScan = None
 SingleThreadedExecutor = None
+Buffer = None
+TransformListener = None
 _ros_import_error: Optional[str] = None
 _ros_environment_loaded = False
 
 
 def _ensure_ros_perception(setup_paths=()) -> bool:
-    global rclpy, Image, LaserScan, SingleThreadedExecutor, _ros_import_error, _ros_environment_loaded
+    global rclpy, Image, LaserScan, SingleThreadedExecutor, Buffer, TransformListener, _ros_import_error, _ros_environment_loaded
     if (
         rclpy is not None
         and Image is not None
@@ -38,9 +41,12 @@ def _ensure_ros_perception(setup_paths=()) -> bool:
         rclpy = import_module("rclpy")
         sensor_msgs = import_module("sensor_msgs.msg")
         executors = import_module("rclpy.executors")
+        tf2_ros = import_module("tf2_ros")
         Image = sensor_msgs.Image
         LaserScan = sensor_msgs.LaserScan
         SingleThreadedExecutor = executors.SingleThreadedExecutor
+        Buffer = tf2_ros.Buffer
+        TransformListener = tf2_ros.TransformListener
         _ros_import_error = None
         return True
     except Exception as exc:  # pragma: no cover - depends on ROS runtime.
@@ -61,6 +67,7 @@ class DepthFrame:
     is_bigendian: bool
     data: bytes
     received_at: float
+    source_timestamp: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,7 @@ class ScanFrame:
     range_max: float
     ranges: tuple[float, ...]
     received_at: float
+    source_timestamp: Optional[float] = None
 
 
 class TargetRangeEstimator:
@@ -93,6 +101,10 @@ class TargetRangeEstimator:
         camera_horizontal_fov_deg: float = 60.0,
         lidar_angle_offset_deg: float = 0.0,
         lidar_angle_candidates_deg: Optional[Sequence[float]] = None,
+        map_frame: str = "map",
+        base_frame: str = "base_link",
+        laser_frame: str = "laser",
+        camera_frame: str = "camera_link",
     ):
         self.scan_topic = scan_topic
         self.depth_topic = depth_topic
@@ -103,10 +115,16 @@ class TargetRangeEstimator:
             float(value)
             for value in (lidar_angle_candidates_deg or self.DEFAULT_LIDAR_ANGLE_CANDIDATES_DEG)
         )
+        self.map_frame = map_frame
+        self.base_frame = base_frame
+        self.laser_frame = laser_frame
+        self.camera_frame = camera_frame
         self.node = None
         self.executor = None
         self.depth_subscription = None
         self.scan_subscription = None
+        self.tf_buffer = None
+        self.tf_listener = None
         self._spin_thread = None
         self._lock = threading.RLock()
         self._depth: Optional[DepthFrame] = None
@@ -128,6 +146,8 @@ class TargetRangeEstimator:
             self.node = rclpy.create_node("peacekeeper_target_range_estimator")
             self.executor = SingleThreadedExecutor()
             self.executor.add_node(self.node)
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self.node, spin_thread=False)
             self.depth_subscription = self.node.create_subscription(
                 Image,
                 self.depth_topic,
@@ -151,6 +171,8 @@ class TargetRangeEstimator:
             self.executor = None
             self.depth_subscription = None
             self.scan_subscription = None
+            self.tf_listener = None
+            self.tf_buffer = None
             self._depth = None
             self._scan = None
         if executor is not None:
@@ -193,6 +215,7 @@ class TargetRangeEstimator:
             return dict(payload)
 
         enriched = dict(payload)
+        enriched["observation_id"] = str(enriched.get("observation_id") or uuid.uuid4())
         next_detections = []
         measured_count = 0
         used_sources: set[str] = set()
@@ -202,10 +225,20 @@ class TargetRangeEstimator:
             center_x = float(bbox.get("x") or 0.0) + float(bbox.get("width") or 0.0) / 2.0
             center_y = float(bbox.get("y") or 0.0) + float(bbox.get("height") or 0.0) / 2.0
             bearing_rad = self._bearing_from_pixel(center_x, width)
-            range_m, source = self._measure_range(center_x, center_y, width, height, bbox, bearing_rad)
+            measurement = self._measure_range(center_x, center_y, width, height, bbox, bearing_rad)
+            range_m = measurement.get("range_m")
+            source = measurement.get("source")
             detection["bearing_deg"] = round(math.degrees(bearing_rad), 1)
             detection["range_m"] = round(range_m, 3) if range_m is not None else None
             detection["range_source"] = source
+            detection["range_quality"] = measurement.get("quality")
+            detection["measurement_age_ms"] = measurement.get("age_ms")
+            detection["measurement_timestamp"] = measurement.get("timestamp")
+            detection["measurement_angle_deg"] = measurement.get("angle_deg")
+            robot_pose, target_pose = self._map_poses(measurement, bearing_rad)
+            detection["robot_pose_map"] = robot_pose
+            detection["target_pose_map"] = target_pose
+            detection["localization_valid"] = target_pose is not None
             if range_m is not None:
                 measured_count += 1
             if source:
@@ -228,14 +261,14 @@ class TargetRangeEstimator:
         image_height: int,
         bbox: dict[str, Any],
         bearing_rad: float,
-    ) -> tuple[Optional[float], Optional[str]]:
-        depth_m = self._measure_depth(center_x, center_y, image_width, image_height)
-        if depth_m is not None:
-            return depth_m, "depth_camera"
-        lidar_m = self._measure_lidar(center_x, image_width, bbox, bearing_rad)
-        if lidar_m is not None:
-            return lidar_m, "lidar"
-        return None, None
+    ) -> dict[str, Any]:
+        depth = self._measure_depth(center_x, center_y, image_width, image_height)
+        if depth is not None:
+            return depth
+        lidar = self._measure_lidar(center_x, image_width, bbox, bearing_rad)
+        if lidar is not None:
+            return lidar
+        return {"range_m": None, "source": None, "quality": None, "age_ms": None, "angle_deg": None, "timestamp": None}
 
     def _measure_depth(
         self,
@@ -243,7 +276,7 @@ class TargetRangeEstimator:
         center_y: float,
         image_width: int,
         image_height: int,
-    ) -> Optional[float]:
+    ) -> Optional[dict[str, Any]]:
         with self._lock:
             depth = self._depth
         if depth is None or time.time() - depth.received_at > self.DEPTH_STALE_AFTER_S:
@@ -265,7 +298,15 @@ class TargetRangeEstimator:
         ]
         if not values:
             return None
-        return sum(values) / len(values)
+        return {
+            "range_m": float(median(values)),
+            "source": "depth_camera",
+            "quality": "calibrated",
+            "age_ms": round(max(0.0, time.time() - depth.received_at) * 1000.0, 1),
+            "angle_deg": None,
+            "timestamp": depth.source_timestamp or depth.received_at,
+            "frame": self.camera_frame,
+        }
 
     def _measure_lidar(
         self,
@@ -273,7 +314,7 @@ class TargetRangeEstimator:
         image_width: int,
         bbox: dict[str, Any],
         bearing_rad: float,
-    ) -> Optional[float]:
+    ) -> Optional[dict[str, Any]]:
         del center_x
         with self._lock:
             scan = self._scan
@@ -303,9 +344,20 @@ class TargetRangeEstimator:
         # Respect an explicit non-zero offset when it works; otherwise auto-pick
         # the nearest valid obstacle among the known mounting candidates.
         if preferred is not None and not math.isclose(self.lidar_angle_offset_deg, 0.0, abs_tol=1e-6):
-            return preferred[1]
-        best = min(candidates, key=lambda item: (item[1], -item[2], abs(item[0] - self.lidar_angle_offset_deg)))
-        return best[1]
+            best = preferred
+        else:
+            best = min(candidates, key=lambda item: (item[1], -item[2], abs(item[0] - self.lidar_angle_offset_deg)))
+        selected_angle = bearing_rad + math.radians(best[0])
+        calibrated = math.isclose(best[0], self.lidar_angle_offset_deg, abs_tol=1e-6)
+        return {
+            "range_m": best[1],
+            "source": "lidar",
+            "quality": "calibrated" if calibrated else "fallback",
+            "age_ms": round(max(0.0, time.time() - scan.received_at) * 1000.0, 1),
+            "angle_deg": round(math.degrees(selected_angle), 2),
+            "timestamp": scan.source_timestamp or scan.received_at,
+            "frame": self.laser_frame,
+        }
 
     def _on_depth_image(self, msg) -> None:
         try:
@@ -317,6 +369,7 @@ class TargetRangeEstimator:
                 is_bigendian=bool(msg.is_bigendian),
                 data=bytes(msg.data),
                 received_at=time.time(),
+                source_timestamp=self._message_timestamp(msg),
             )
             with self._lock:
                 self._depth = frame
@@ -334,6 +387,7 @@ class TargetRangeEstimator:
                 range_max=float(msg.range_max),
                 ranges=tuple(float(value) for value in msg.ranges),
                 received_at=time.time(),
+                source_timestamp=self._message_timestamp(msg),
             )
             with self._lock:
                 self._scan = frame
@@ -421,3 +475,64 @@ class TargetRangeEstimator:
         # convention, left side is a positive bearing (CCW), so the image sign
         # must be flipped before projecting into scan angles.
         return -normalized * math.radians(self.camera_horizontal_fov_deg)
+
+    @staticmethod
+    def _message_timestamp(msg) -> Optional[float]:
+        stamp = getattr(getattr(msg, "header", None), "stamp", None)
+        if stamp is None:
+            return None
+        value = float(getattr(stamp, "sec", 0)) + float(getattr(stamp, "nanosec", 0)) / 1_000_000_000.0
+        return value if value > 0 else None
+
+    def _map_poses(self, measurement: dict[str, Any], camera_bearing_rad: float) -> tuple[Optional[dict], Optional[dict]]:
+        robot_transform = self._lookup_transform(self.base_frame, measurement.get("timestamp"))
+        robot_pose = self._pose_from_transform(robot_transform) if robot_transform is not None else None
+        distance = measurement.get("range_m")
+        if distance is None:
+            return robot_pose, None
+        source_frame = measurement.get("frame") or self.base_frame
+        source_transform = self._lookup_transform(source_frame, measurement.get("timestamp"))
+        if source_transform is None:
+            return robot_pose, None
+        angle = camera_bearing_rad
+        if source_frame == self.laser_frame and measurement.get("angle_deg") is not None:
+            angle = math.radians(float(measurement["angle_deg"]))
+        yaw = self._yaw(source_transform.transform.rotation)
+        local_x = float(distance) * math.cos(angle)
+        local_y = float(distance) * math.sin(angle)
+        tx = float(source_transform.transform.translation.x)
+        ty = float(source_transform.transform.translation.y)
+        return robot_pose, {
+            "x": round(tx + local_x * math.cos(yaw) - local_y * math.sin(yaw), 3),
+            "y": round(ty + local_x * math.sin(yaw) + local_y * math.cos(yaw), 3),
+        }
+
+    def _lookup_transform(self, source_frame: str, timestamp: Optional[float]):
+        buffer = self.tf_buffer
+        if buffer is None or rclpy is None:
+            return None
+        try:
+            if timestamp:
+                stamp = rclpy.time.Time(seconds=float(timestamp))
+            else:
+                stamp = rclpy.time.Time()
+            return buffer.lookup_transform(self.map_frame, source_frame, stamp)
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+
+    @classmethod
+    def _pose_from_transform(cls, transform) -> dict[str, float]:
+        return {
+            "x": round(float(transform.transform.translation.x), 3),
+            "y": round(float(transform.transform.translation.y), 3),
+            "yaw": round(cls._yaw(transform.transform.rotation), 4),
+        }
+
+    @staticmethod
+    def _yaw(rotation) -> float:
+        x = float(rotation.x)
+        y = float(rotation.y)
+        z = float(rotation.z)
+        w = float(rotation.w)
+        return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
