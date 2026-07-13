@@ -36,6 +36,7 @@ def create_server(config: VisionConfig, host: str = "127.0.0.1", port: int = 809
     if host not in ("127.0.0.1", "::1", "localhost"):
         raise ValueError("vision worker must bind to loopback only")
     vision = VisionService(config)
+    vision.load()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:

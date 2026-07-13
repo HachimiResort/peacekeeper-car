@@ -81,7 +81,10 @@ def create_app(config: AgentConfig) -> FastAPI:
     )
     video = VideoService(config.video, run_dir)
     vision_worker = VisionWorkerClient(config.vision) if config.vision.worker_url else None
-    vision_capture = VisionCaptureService(video, VisionService(config.vision), worker=vision_worker)
+    vision = VisionService(config.vision)
+    if config.vision.enabled and vision_worker is None:
+        vision.load()
+    vision_capture = VisionCaptureService(video, vision, worker=vision_worker)
     mapping = MappingService(config, process_manager)
     navigation = NavigationService(
         config,

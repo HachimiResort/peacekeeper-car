@@ -75,7 +75,7 @@ export function VisionDetectionCard({ api, robotId, available }: { api: MissionA
     </div>
     {!available && <InlineActionStatus tone="warning" title="视觉识别暂不可用" detail="车辆离线或已停用，恢复在线后可执行识别。" />}
     {status && !status.enabled && <InlineActionStatus tone="warning" title="YOLO 未启用" detail="请先在 fleet-agent 配置中启用 vision。" />}
-    {status?.enabled && !status.model_loaded && <InlineActionStatus tone="warning" title="模型尚未加载" detail="检查车端视觉工作进程和 TensorRT 引擎。" />}
+    {status?.enabled && !status.model_loaded && <InlineActionStatus tone="warning" title="模型未就绪" detail="YOLO worker 应在启动阶段加载模型，请检查工作进程和 TensorRT 引擎日志。" />}
     <div className="vision-workspace">
       <div className="vision-frame">
         {imageUrl

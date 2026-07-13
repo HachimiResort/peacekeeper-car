@@ -22,5 +22,9 @@ cd /home/jetson/peacekeeper-car
 ./robot/fleet-agent/run_vision_worker.sh
 ```
 
+The worker loads and validates the TensorRT engine before it begins listening
+on port 8092. Once `/health` responds, capture requests do not pay a model
+cold-start cost.
+
 Set `VISION_ENGINE` when the engine is stored elsewhere. The command only
 starts inference HTTP on loopback; it does not open `/dev/video0`.

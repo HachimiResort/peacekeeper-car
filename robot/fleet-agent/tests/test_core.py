@@ -394,6 +394,20 @@ class CoreTests(unittest.TestCase):
             service.analyze(FakeFrame())
         self.assertFalse(service.status()["model_loaded"])
 
+    def test_vision_can_preload_the_model_before_inference(self):
+        model = FakeVisionModel()
+        loaded_paths = []
+        service = VisionService(
+            VisionConfig(enabled=True, engine_path="/models/yolov8n.engine"),
+            model_factory=lambda path: loaded_paths.append(path) or model,
+        )
+
+        service.load()
+        service.load()
+
+        self.assertTrue(service.status()["model_loaded"])
+        self.assertEqual(loaded_paths, ["/models/yolov8n.engine"])
+
     def test_vision_capture_reuses_the_agent_camera_frame_and_caches_result(self):
         video = FakeVisionVideo(FakeFrame())
         model = FakeVisionModel()

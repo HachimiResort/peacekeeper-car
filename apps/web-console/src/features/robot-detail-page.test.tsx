@@ -9,6 +9,7 @@ import { RobotDetailPage } from "./robot-detail-page"
 
 describe("RobotDetailPage control safety", () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
     window.__PEACEKEEPER_CONFIG__ = { demoMode: true }
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:test") })
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() })
@@ -49,7 +50,9 @@ describe("RobotDetailPage control safety", () => {
 
     expect(await screen.findByRole("heading", { name: "YOLO 单帧识别" })).toBeInTheDocument()
     expect(await screen.findByAltText("YOLO 带框识别结果")).toHaveAttribute("src", "blob:test")
-    await userEvent.click(screen.getByRole("button", { name: "识别当前画面" }))
+    const captureButton = screen.getByRole("button", { name: "识别当前画面" })
+    expect(captureButton).toBeEnabled()
+    await userEvent.click(captureButton)
     await waitFor(() => expect(captureSpy).toHaveBeenCalledWith("car_1"))
     expect(await screen.findByText("45.4 ms")).toBeInTheDocument()
   })

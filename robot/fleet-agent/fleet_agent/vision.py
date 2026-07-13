@@ -1,4 +1,4 @@
-"""Model-agnostic detection data and lazy YOLO TensorRT inference.
+"""Model-agnostic detection data and preloaded YOLO TensorRT inference.
 
 This module never opens a camera and never imports control modules. The agent
 will later pass it frames from its already-owned ``VideoService`` instance.
@@ -91,6 +91,10 @@ class VisionService:
             "last_result": self._last_result.as_dict() if self._last_result else None,
             "last_error": self._last_error,
         }
+
+    def load(self) -> None:
+        """Load and validate the configured model before serving requests."""
+        self._load_model()
 
     def analyze(self, frame: Any) -> Tuple[VisionResult, Any]:
         model = self._load_model()
