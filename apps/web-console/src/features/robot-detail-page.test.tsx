@@ -34,4 +34,23 @@ describe("RobotDetailPage control safety", () => {
     view.unmount()
     expect(actionSpy.mock.calls.map((call) => call[1])).not.toContain("control/stop")
   })
+
+  it("shows an annotated YOLO image and supports a new single-frame capture", async () => {
+    const captureSpy = vi.spyOn(DemoMissionApi.prototype, "visionCapture")
+    render(
+      <FeedbackProvider>
+        <MemoryRouter initialEntries={["/robots/car_1"]}>
+          <SessionProvider>
+            <Routes><Route path="/robots/:robotId" element={<RobotDetailPage />} /></Routes>
+          </SessionProvider>
+        </MemoryRouter>
+      </FeedbackProvider>,
+    )
+
+    expect(await screen.findByRole("heading", { name: "YOLO 单帧识别" })).toBeInTheDocument()
+    expect(await screen.findByAltText("YOLO 带框识别结果")).toHaveAttribute("src", "blob:test")
+    await userEvent.click(screen.getByRole("button", { name: "识别当前画面" }))
+    await waitFor(() => expect(captureSpy).toHaveBeenCalledWith("car_1"))
+    expect(await screen.findByText("45.4 ms")).toBeInTheDocument()
+  })
 })
