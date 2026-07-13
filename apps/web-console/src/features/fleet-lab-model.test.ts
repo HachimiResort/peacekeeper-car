@@ -6,6 +6,7 @@ import {
   collisionWarnings,
   createBarrierRun,
   createFleetLabDraft,
+  createFleetWaypoint,
   evaluateBarrier,
   goalIdFromResponse,
   loadFleetLabDraft,
@@ -14,7 +15,7 @@ import {
   waypointYaw,
 } from "./fleet-lab-model"
 
-const point = (x: number, y: number) => ({ x, y, pixelX: x, pixelY: y })
+const point = (x: number, y: number) => createFleetWaypoint({ x, y, pixelX: x, pixelY: y })
 const live = (goalId: string, state: string): JsonObject => ({ online: true, status: { navigation: { last_result: { goal_id: goalId, state } } } })
 
 describe("fleet lab route model", () => {
@@ -41,6 +42,20 @@ describe("fleet lab route model", () => {
     const draft = { ...createFleetLabDraft(), mapId: "map-1", phase: "running" as const }
     saveFleetLabDraft(draft, storage)
     expect(loadFleetLabDraft(storage)).toMatchObject({ mapId: "map-1", phase: "recovery_required" })
+  })
+
+  it("migrates v1 waypoints with safe default light effects", () => {
+    const storage = window.sessionStorage
+    storage.clear()
+    storage.setItem("peacekeeper.fleet-lab.v1", JSON.stringify({
+      version: 1,
+      mapId: "map-1",
+      robotIds: ["a"],
+      rows: [{ a: { x: 1, y: 2, pixelX: 3, pixelY: 4 } }],
+      initialPoses: {},
+      phase: "draft",
+    }))
+    expect(loadFleetLabDraft(storage)).toMatchObject({ version: 2, rows: [{ a: { travelLight: "ignore", waitingLight: "ignore" } }] })
   })
 })
 

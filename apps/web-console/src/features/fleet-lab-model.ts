@@ -1,4 +1,5 @@
 import type { JsonObject, MapPoint } from "../api/types"
+import type { LightEffect } from "./fleet-light-program"
 
 export const FLEET_LAB_STORAGE_KEY = "peacekeeper.fleet-lab.v1"
 export const FLEET_LAB_COLORS = ["#e85d5d", "#3b82f6", "#e3a526", "#8b5cf6", "#14a98b", "#ec4899"]
@@ -8,6 +9,8 @@ export type CellState = "idle" | "sending" | "active" | "arrived" | "failed" | "
 
 export interface FleetWaypoint extends MapPoint {
   yawOverride?: number
+  travelLight: LightEffect
+  waitingLight: LightEffect
 }
 
 export interface FleetLabInitialPose extends MapPoint {
@@ -17,7 +20,7 @@ export interface FleetLabInitialPose extends MapPoint {
 }
 
 export interface FleetLabDraft {
-  version: 1
+  version: 2
   mapId: string
   robotIds: string[]
   rows: Array<Record<string, FleetWaypoint | null>>
@@ -57,7 +60,7 @@ export interface NavigationSnapshot {
 
 export function createFleetLabDraft(rowCount = 5): FleetLabDraft {
   return {
-    version: 1,
+    version: 2,
     mapId: "",
     robotIds: [],
     rows: Array.from({ length: rowCount }, () => ({})),
@@ -73,11 +76,13 @@ export function loadFleetLabDraft(storage: Storage = sessionStorage): FleetLabDr
   const fallback = createFleetLabDraft()
   try {
     const value = JSON.parse(storage.getItem(FLEET_LAB_STORAGE_KEY) || "null") as Partial<FleetLabDraft> | null
-    if (!value || value.version !== 1 || !Array.isArray(value.rows) || !Array.isArray(value.robotIds)) return fallback
+    if (!value || ![1, 2].includes(Number(value.version)) || !Array.isArray(value.rows) || !Array.isArray(value.robotIds)) return fallback
     const phase = ["preparing", "ready", "running", "blocked"].includes(String(value.phase)) ? "recovery_required" : "draft"
     return {
       ...fallback,
       ...value,
+      version: 2,
+      rows: value.rows.map((row) => Object.fromEntries(Object.entries(row || {}).map(([robotId, waypoint]) => [robotId, migrateWaypoint(waypoint)]))),
       phase,
       timeoutS: clamp(Number(value.timeoutS), 10, 1800, 180),
       staleAfterS: clamp(Number(value.staleAfterS), 5, 60, 10),
@@ -85,6 +90,15 @@ export function loadFleetLabDraft(storage: Storage = sessionStorage): FleetLabDr
     }
   } catch {
     return fallback
+  }
+}
+
+export function createFleetWaypoint(point: MapPoint, current?: Partial<FleetWaypoint>): FleetWaypoint {
+  return {
+    ...point,
+    ...current,
+    travelLight: current?.travelLight || "ignore",
+    waitingLight: current?.waitingLight || "ignore",
   }
 }
 
@@ -255,6 +269,13 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+function migrateWaypoint(value: unknown): FleetWaypoint | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const point = value as Partial<FleetWaypoint>
+  if (![point.x, point.y, point.pixelX, point.pixelY].every((item) => typeof item === "number" && Number.isFinite(item))) return null
+  return createFleetWaypoint({ x: point.x!, y: point.y!, pixelX: point.pixelX!, pixelY: point.pixelY! }, point)
 }
 
 function clamp(value: number, minimum: number, maximum: number, fallback: number) {

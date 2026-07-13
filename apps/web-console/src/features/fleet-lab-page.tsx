@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CircleStop, Crosshair, FlaskConical, MapPinned, Play, Plus, RotateCcw, ShieldCheck, SkipForward, Trash2 } from "lucide-react"
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CircleStop, Crosshair, FlaskConical, Lightbulb, MapPinned, Play, Plus, RotateCcw, ShieldCheck, SkipForward, Trash2 } from "lucide-react"
 import { useFeedback } from "../app/feedback"
 import { useLiveStatus } from "../app/live-status"
 import { useSession } from "../app/session"
@@ -12,6 +12,7 @@ import {
   beginBarrierRow,
   collisionWarnings,
   createBarrierRun,
+  createFleetWaypoint,
   degreesToRadiansNormalized,
   evaluateBarrier,
   goalIdFromResponse,
@@ -24,6 +25,8 @@ import {
   type BarrierRun,
   type FleetLabDraft,
 } from "./fleet-lab-model"
+import { FleetAudioDock } from "./fleet-audio-dock"
+import { FleetLightProgram, LIGHT_EFFECT_OPTIONS, lightEffectLabel, type LightEffect } from "./fleet-light-program"
 
 type ActiveTarget = { kind: "pose"; robotId: string } | { kind: "waypoint"; robotId: string; rowIndex: number } | null
 
@@ -43,10 +46,25 @@ export function FleetLabPage() {
   const blockedHandledRef = useRef(false)
   const runRef = useRef<BarrierRun | null>(null)
   const draftRef = useRef(draft)
+  const lightProgramRef = useRef<FleetLightProgram | null>(null)
+  const notifyRef = useRef(feedback.notify)
+  notifyRef.current = feedback.notify
   const selectedMap = maps?.find((item) => item.id === draft.mapId) || null
 
   const setRun = useCallback((value: BarrierRun | null) => { runRef.current = value; setRunState(value) }, [])
   useEffect(() => { draftRef.current = draft; saveFleetLabDraft(draft) }, [draft])
+  useEffect(() => {
+    if (!api) return
+    const program = new FleetLightProgram(
+      (robotId, state) => api.robotAction(robotId, "control/lights", { ...state, duration_ms: 0 }),
+      (robotId, cause) => notifyRef.current({ title: "灯效下发失败", description: `${robotId}：${messageOf(cause, "车辆未接受灯光指令")}`, tone: "warning" }),
+    )
+    lightProgramRef.current = program
+    return () => {
+      program.dispose(draftRef.current.robotIds)
+      if (lightProgramRef.current === program) lightProgramRef.current = null
+    }
+  }, [api])
 
   const load = useCallback(async () => {
     if (!api) return
@@ -92,7 +110,7 @@ export function FleetLabPage() {
       if (activeTarget.kind === "pose") {
         return { ...current, initialPoses: { ...current.initialPoses, [activeTarget.robotId]: { ...point, yaw: current.initialPoses[activeTarget.robotId]?.yaw || 0, sent: false, confirmed: false } }, phase: "draft" }
       }
-      const rows = current.rows.map((row, index) => index === activeTarget.rowIndex ? { ...row, [activeTarget.robotId]: point } : row)
+      const rows = current.rows.map((row, index) => index === activeTarget.rowIndex ? { ...row, [activeTarget.robotId]: createFleetWaypoint(point, row[activeTarget.robotId] || undefined) } : row)
       return { ...current, rows, phase: "draft" }
     })
   }
@@ -124,7 +142,11 @@ export function FleetLabPage() {
 
   const safeHold = useCallback(async (robotIds = draftRef.current.robotIds) => {
     if (!api) return
-    await Promise.allSettled(robotIds.flatMap((robotId) => [api.navigationCancel(robotId), api.robotAction(robotId, "control/stop")]))
+    const lightStop = lightProgramRef.current?.stopAll(robotIds) || Promise.resolve()
+    await Promise.allSettled([
+      lightStop,
+      ...robotIds.flatMap((robotId) => [api.navigationCancel(robotId), api.robotAction(robotId, "control/stop")]),
+    ])
   }, [api])
 
   const prepare = async () => {
@@ -163,6 +185,7 @@ export function FleetLabPage() {
     const ids = targetIds || currentDraft.robotIds
     let next = beginBarrierRow({ ...base, rowIndex }, currentDraft.robotIds, Date.now(), Boolean(targetIds))
     setRun(next); blockedHandledRef.current = false
+    ids.forEach((robotId) => lightProgramRef.current?.set(robotId, currentDraft.rows[rowIndex][robotId]!.travelLight))
     const results = await Promise.allSettled(ids.map(async (robotId) => {
       const point = currentDraft.rows[rowIndex][robotId]!
       const installedName = deploymentByRobot[robotId].installed_name!
@@ -196,6 +219,12 @@ export function FleetLabPage() {
       const current = runRef.current
       if (!current || current.phase !== "running") return
       const result = evaluateBarrier(current, draftRef.current.robotIds, statuses, lastUpdatedAt, draftRef.current.timeoutS, Date.now(), draftRef.current.staleAfterS)
+      draftRef.current.robotIds.forEach((robotId) => {
+        if (current.robots[robotId]?.state !== "arrived" && result.run.robots[robotId]?.state === "arrived") {
+          const waypoint = draftRef.current.rows[current.rowIndex]?.[robotId]
+          if (waypoint) lightProgramRef.current?.set(robotId, waypoint.waitingLight)
+        }
+      })
       setRun(result.run)
       if (result.outcome === "blocked" && !blockedHandledRef.current) {
         blockedHandledRef.current = true
@@ -210,7 +239,7 @@ export function FleetLabPage() {
           if (nextRow >= draftRef.current.rows.length) {
             const completed = { ...latest, phase: "completed" as const, rowStartedAt: null }
             setRun(completed); setDraft((value) => ({ ...value, phase: "completed" }))
-            void Promise.allSettled(draftRef.current.robotIds.map((robotId) => api!.robotAction(robotId, "control/stop")))
+            void safeHold()
             feedback.notify({ title: "多车联动已完成", description: "全部车辆通过所有时间片", tone: "success" })
           } else void dispatchRow({ ...latest, rowIndex: nextRow }, nextRow)
           advancingRef.current = false
@@ -218,7 +247,7 @@ export function FleetLabPage() {
       }
     }, 250)
     return () => window.clearInterval(timer)
-  }, [api, dispatchRow, feedback, lastUpdatedAt, run?.phase, safeHold, setRun, statuses])
+  }, [dispatchRow, feedback, lastUpdatedAt, run?.phase, safeHold, setRun, statuses])
 
   const retry = async () => {
     if (!run) return
@@ -231,7 +260,7 @@ export function FleetLabPage() {
     if (!run || !await feedback.confirm({ title: "跳过当前时间片？", description: "未到达车辆会从当前位置直接规划到下一行目标。", confirmLabel: "确认跳过", tone: "warning" })) return
     const skipped = { ...run, robots: Object.fromEntries(draft.robotIds.map((id) => [id, { ...run.robots[id], state: "skipped" as const }])) }
     const nextRow = run.rowIndex + 1
-    if (nextRow >= draft.rows.length) { setRun({ ...skipped, phase: "completed" }); updateDraft((value) => ({ ...value, phase: "completed" })); return }
+    if (nextRow >= draft.rows.length) { setRun({ ...skipped, phase: "completed" }); updateDraft((value) => ({ ...value, phase: "completed" })); await safeHold(); return }
     await dispatchRow(skipped, nextRow)
   }
   const abort = async () => {
@@ -240,6 +269,23 @@ export function FleetLabPage() {
   const recover = async () => {
     setBusy("recover"); await safeHold(); setRun(null); updateDraft((value) => ({ ...value, phase: "draft" })); setBusy("")
   }
+
+  const activeWaypoint = activeTarget?.kind === "waypoint" ? draft.rows[activeTarget.rowIndex]?.[activeTarget.robotId] || null : null
+  const activeWaypointLabel = activeTarget?.kind === "waypoint" ? `${letter(draft.robotIds.indexOf(activeTarget.robotId))}${activeTarget.rowIndex + 1}` : ""
+  const setWaypointLight = (field: "travelLight" | "waitingLight", effect: LightEffect) => {
+    if (!activeTarget || activeTarget.kind !== "waypoint") return
+    updateDraft((current) => ({
+      ...current,
+      rows: current.rows.map((row, index) => index === activeTarget.rowIndex ? {
+        ...row,
+        [activeTarget.robotId]: { ...row[activeTarget.robotId]!, [field]: effect },
+      } : row),
+      phase: "draft",
+    }))
+  }
+  const audioRobots = selectedRobots.filter((robot) => robot.enabled && robot.online)
+  const showAudioError = useCallback((message: string) => feedback.notify({ title: "音频操作未完成", description: message, tone: "error" }), [feedback])
+  const showAudioSuccess = useCallback((message: string) => feedback.notify({ title: "音频指令已下发", description: message, tone: "success" }), [feedback])
 
   if (!robots || !maps) return <LoadingBlock label="正在加载联动实验台" />
   return <div className="page-enter fleet-lab-page">
@@ -260,7 +306,9 @@ export function FleetLabPage() {
       <div className="fleet-lab-side">
         <Card className="panel"><div className="panel-head"><div><h2>车辆准备</h2><p>先启动 Nav2，再下发并人工确认定位</p></div><ShieldCheck /></div><div className="lab-vehicle-list">{selectedRobots.map((robot, index) => { const pose = draft.initialPoses[robot.id]; const navigation = navigationSnapshot(statuses[robot.id]); return <article key={robot.id}><div className="lab-vehicle-head"><span className="lab-color" style={{ background: FLEET_LAB_COLORS[index % FLEET_LAB_COLORS.length] }} /><div><strong>{letter(index)} · {robot.name}</strong><small>{navigation.ready ? `Nav2 ${navigation.currentMap}` : "Nav2 未就绪"}</small></div><div className="lab-reorder"><Button size="sm" variant="ghost" disabled={editingLocked || index === 0} onClick={() => reorderRobot(index, -1)}><ArrowLeft /></Button><Button size="sm" variant="ghost" disabled={editingLocked || index === draft.robotIds.length - 1} onClick={() => reorderRobot(index, 1)}><ArrowRight /></Button></div></div><Button className="w-full" variant={activeTarget?.kind === "pose" && activeTarget.robotId === robot.id ? "primary" : "secondary"} disabled={editingLocked} onClick={() => setActiveTarget({ kind: "pose", robotId: robot.id })}><Crosshair />{pose ? `起点 x ${pose.x.toFixed(2)} / y ${pose.y.toFixed(2)}` : "在地图设置起点"}</Button>{pose && <div className="pose-row"><label>Yaw °<input className={fieldClass} type="number" value={pose.yaw} disabled={editingLocked} onChange={(event) => updateDraft((value) => ({ ...value, initialPoses: { ...value.initialPoses, [robot.id]: { ...value.initialPoses[robot.id]!, yaw: Number(event.target.value), sent: false, confirmed: false } } }))} /></label><label className="switch-field"><input type="checkbox" checked={pose.confirmed} disabled={!pose.sent || editingLocked} onChange={(event) => confirmLocalization(robot.id, event.target.checked)} /><span>定位稳定</span></label></div>}</article> })}</div><Button className="w-full" variant="primary" loading={busy === "prepare"} loadingText="正在准备所有车辆" disabled={editingLocked || draft.robotIds.length < 2 || draft.robotIds.some((id) => !draft.initialPoses[id])} onClick={() => void prepare()}><RotateCcw />启动/校验 Nav2 并下发初始位姿</Button></Card>
 
-        <Card className="panel lab-matrix-card"><div className="panel-head"><div><h2>时间片矩阵</h2><p>{draft.robotIds.length} 列 × {draft.rows.length} 行</p></div><Plus /></div><div className="lab-matrix-scroll"><table className="lab-matrix"><thead><tr><th>片</th>{selectedRobots.map((robot, index) => <th key={robot.id}><span className="lab-color" style={{ background: FLEET_LAB_COLORS[index % FLEET_LAB_COLORS.length] }} />{letter(index)}</th>)}</tr></thead><tbody>{draft.rows.map((row, rowIndex) => <tr key={rowIndex} className={run?.rowIndex === rowIndex ? "current" : ""}><th>{rowIndex + 1}</th>{draft.robotIds.map((robotId, robotIndex) => { const point = row[robotId]; const state = run?.rowIndex === rowIndex ? run.robots[robotId]?.state : run && rowIndex < run.rowIndex ? "arrived" : "idle"; const selected = activeTarget?.kind === "waypoint" && activeTarget.robotId === robotId && activeTarget.rowIndex === rowIndex; return <td key={robotId}><button type="button" className={selected ? "selected" : ""} disabled={editingLocked} onClick={() => setActiveTarget({ kind: "waypoint", robotId, rowIndex })}><b>{letter(robotIndex)}{rowIndex + 1}</b><span>{point ? `${point.x.toFixed(2)}, ${point.y.toFixed(2)}` : "点击选点"}</span>{state !== "idle" && <small className={`cell-${state}`}>{cellLabel(state)}{run?.robots[robotId]?.distanceRemaining !== null && run?.robots[robotId]?.distanceRemaining !== undefined ? ` ${run.robots[robotId].distanceRemaining!.toFixed(1)}m` : ""}</small>}</button>{point && !editingLocked && <div className="cell-yaw"><input aria-label={`${letter(robotIndex)}${rowIndex + 1} yaw`} type="number" placeholder="自动" value={point.yawOverride ?? ""} onChange={(event) => updateDraft((value) => ({ ...value, rows: value.rows.map((item, index) => index === rowIndex ? { ...item, [robotId]: { ...item[robotId]!, yawOverride: event.target.value === "" ? undefined : Number(event.target.value) } } : item) }))} /><span>° {Math.round(waypointYaw(draft, robotId, rowIndex))}</span><Button size="sm" variant="ghost" aria-label="删除点位" onClick={() => updateDraft((value) => ({ ...value, rows: value.rows.map((item, index) => { if (index !== rowIndex) return item; const next = { ...item }; delete next[robotId]; return next }) }))}><Trash2 /></Button></div>}</td> })}</tr>)}</tbody></table></div><Button variant="ghost" disabled={editingLocked} onClick={() => updateDraft((value) => resizeRows(value, value.rows.length + 1))}><Plus />增加时间片</Button></Card>
+        <Card className="panel lab-matrix-card"><div className="panel-head"><div><h2>时间片矩阵</h2><p>{draft.robotIds.length} 列 × {draft.rows.length} 行</p></div><Plus /></div><div className="lab-matrix-scroll"><table className="lab-matrix"><thead><tr><th>片</th>{selectedRobots.map((robot, index) => <th key={robot.id}><span className="lab-color" style={{ background: FLEET_LAB_COLORS[index % FLEET_LAB_COLORS.length] }} />{letter(index)}</th>)}</tr></thead><tbody>{draft.rows.map((row, rowIndex) => <tr key={rowIndex} className={run?.rowIndex === rowIndex ? "current" : ""}><th>{rowIndex + 1}</th>{draft.robotIds.map((robotId, robotIndex) => { const point = row[robotId]; const state = run?.rowIndex === rowIndex ? run.robots[robotId]?.state : run && rowIndex < run.rowIndex ? "arrived" : "idle"; const selected = activeTarget?.kind === "waypoint" && activeTarget.robotId === robotId && activeTarget.rowIndex === rowIndex; return <td key={robotId}><button type="button" className={selected ? "selected" : ""} disabled={editingLocked} onClick={() => setActiveTarget({ kind: "waypoint", robotId, rowIndex })}><b>{letter(robotIndex)}{rowIndex + 1}</b><span>{point ? `${point.x.toFixed(2)}, ${point.y.toFixed(2)}` : "点击选点"}</span>{point && <em className="light-cue-summary">行 {lightEffectLabel(point.travelLight)} · 等 {lightEffectLabel(point.waitingLight)}</em>}{state !== "idle" && <small className={`cell-${state}`}>{cellLabel(state)}{run?.robots[robotId]?.distanceRemaining !== null && run?.robots[robotId]?.distanceRemaining !== undefined ? ` ${run.robots[robotId].distanceRemaining!.toFixed(1)}m` : ""}</small>}</button>{point && !editingLocked && <div className="cell-yaw"><input aria-label={`${letter(robotIndex)}${rowIndex + 1} yaw`} type="number" placeholder="自动" value={point.yawOverride ?? ""} onChange={(event) => updateDraft((value) => ({ ...value, rows: value.rows.map((item, index) => index === rowIndex ? { ...item, [robotId]: { ...item[robotId]!, yawOverride: event.target.value === "" ? undefined : Number(event.target.value) } } : item) }))} /><span>° {Math.round(waypointYaw(draft, robotId, rowIndex))}</span><Button size="sm" variant="ghost" aria-label="删除点位" onClick={() => updateDraft((value) => ({ ...value, rows: value.rows.map((item, index) => { if (index !== rowIndex) return item; const next = { ...item }; delete next[robotId]; return next }) }))}><Trash2 /></Button></div>}</td> })}</tr>)}</tbody></table></div><Button variant="ghost" disabled={editingLocked} onClick={() => updateDraft((value) => resizeRows(value, value.rows.length + 1))}><Plus />增加时间片</Button></Card>
+
+        {activeWaypoint && <Card className="panel light-cue-card"><div className="panel-head"><div><h2>灯光编排 · {activeWaypointLabel}</h2><p>行进时与到达等待时分别下发；频闪与交替闪固定 600ms</p></div><Lightbulb /></div><div className="light-cue-fields"><label>行进灯效<select className={fieldClass} value={activeWaypoint.travelLight} disabled={editingLocked} onChange={(event) => setWaypointLight("travelLight", event.target.value as LightEffect)}>{LIGHT_EFFECT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>到达等待灯效<select className={fieldClass} value={activeWaypoint.waitingLight} disabled={editingLocked} onChange={(event) => setWaypointLight("waitingLight", event.target.value as LightEffect)}>{LIGHT_EFFECT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div><p className="light-cue-note">“不管”只停止本页的闪烁程序，不会额外改变车辆当前灯态。</p></Card>}
 
         {warnings.length > 0 && <InlineActionStatus tone="warning" title={`${warnings.length} 组目标距离过近`} detail={`最小 ${Math.min(...warnings.map((item) => item.distance)).toFixed(2)}m，启动时仍可人工确认继续`} />}
         <Card className="panel lab-run-panel"><div className="panel-head"><div><h2>3. 屏障执行</h2><p>到齐才推进，异常全组停车</p></div><FlaskConical /></div>{run && <div className="lab-run-state"><Badge tone={run.phase === "blocked" ? "danger" : run.phase === "completed" ? "success" : "info"}>{run.phase}</Badge><strong>时间片 {Math.min(run.rowIndex + 1, draft.rows.length)} / {draft.rows.length}</strong>{run.error && <span>{run.error}</span>}</div>}<div className="stack-actions"><Button variant="primary" disabled={!connected || editingLocked || draft.robotIds.length < 2 || draft.phase !== "ready"} onClick={() => void start()}><Play />启动联动</Button>{run?.phase === "blocked" && <><Button onClick={() => void retry()}><RotateCcw />重试未到达车辆</Button><Button variant="warning" onClick={() => void skip()}><SkipForward />跳过当前行</Button></>}<Button variant="danger" loading={busy === "abort"} loadingText="正在停车" disabled={!run || ["completed", "aborted"].includes(run.phase)} onClick={() => void abort()}><CircleStop />终止并全组停车</Button></div>{draft.phase !== "ready" && <InlineActionStatus tone="info" title="尚未满足启动条件" detail="至少选择两辆车，完成全部点位，并为每辆车确认初始定位。" />}</Card>
@@ -268,6 +316,7 @@ export function FleetLabPage() {
     </section>}
     {selectedMap && draft.robotIds.length === 0 && <EmptyState title="请选择参与车辆" detail="地图安装记录决定哪些在线车辆可加入本次实验" />}
     {!selectedMap && <EmptyState title="先选择统一地图" detail="所有参与车辆必须安装同一个中心地图版本" />}
+    {api && audioRobots.length > 0 && <FleetAudioDock api={api} robots={audioRobots} onError={showAudioError} onSuccess={showAudioSuccess} />}
     {demoMode && <div className="demo-floating-note">DEMO 会让车辆以不同速度到达，以验证时间片屏障。</div>}
   </div>
 }
