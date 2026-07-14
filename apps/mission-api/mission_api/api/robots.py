@@ -26,6 +26,7 @@ from ..schemas import (
     RobotUpdate,
     VisionCaptureResponse,
     VisionStatusResponse,
+    VoiceStatusResponse,
 )
 from ..views import robot_view
 
@@ -218,6 +219,29 @@ async def audio_play(
 @router.post("/{robot_id}/audio/stop")
 async def audio_stop(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
     return await _proxy(request, session, robot_id, "/api/audio/stop")
+
+
+@router.get("/{robot_id}/voice/status", response_model=VoiceStatusResponse)
+async def voice_status(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    robot = await get_robot_or_404(session, robot_id)
+    if not robot.enabled:
+        raise ApiError(409, "robot_disabled", f"Robot '{robot_id}' is disabled")
+    return await request.app.state.agent_client.request(robot, "GET", "/api/voice/status")
+
+
+@router.post("/{robot_id}/voice/start", response_model=VoiceStatusResponse)
+async def voice_start(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, "/api/voice/start")
+
+
+@router.post("/{robot_id}/voice/stop", response_model=VoiceStatusResponse)
+async def voice_stop(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, "/api/voice/stop")
+
+
+@router.post("/{robot_id}/voice/trigger-wake")
+async def voice_trigger_wake(robot_id: str, request: Request, session: AsyncSession = Depends(get_session)):
+    return await _proxy(request, session, robot_id, "/api/voice/trigger-wake")
 
 
 @router.post("/{robot_id}/mapping/start")

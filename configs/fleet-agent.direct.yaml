@@ -19,6 +19,24 @@ audio:
   asset_dir: /root/peacekeeper-car/data/audio
   max_asset_bytes: 67108864
 
+# Direct, car-side conversation. Enable after placing the KWS model files and
+# setting mission_api_url. The shared token is injected from the environment.
+voice:
+  enabled: false
+  auto_start: true
+  robot_id: car_1
+  mission_api_url: ""
+  input_device: null
+  output_device: null
+  wake_phrase: 你好
+  stop_phrase: 停止
+  kws_model_dir: /root/peacekeeper-car/models/kws
+  silence_ms: 800
+  max_utterance_s: 15
+  followup_timeout_s: 20
+  # Pre-provision this fixed Mandarin prompt under audio.asset_dir.
+  local_error_asset: voice-service-error.wav
+
 ros:
   distro_setup: /opt/ros/foxy/setup.bash
   workspace_setup: /root/yahboomcar_ros2_ws/yahboomcar_ws/install/setup.bash

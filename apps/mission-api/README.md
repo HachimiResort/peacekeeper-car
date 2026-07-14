@@ -38,6 +38,35 @@ WebSocket clients connect to:
 ws://127.0.0.1:28080/ws/status?token=<shared-token>
 ```
 
+## Doubao Voice Gateway
+
+Set all provider values in the process environment (the root `.env.example`
+lists them). If any credential is absent, Mission API still starts normally
+and rejects only voice connections with a clear `voice_not_configured` event.
+The default Ark model is `doubao-seed-2-0-lite-260215`, with deep thinking and
+response storage disabled.
+
+Each car opens one authenticated connection:
+
+```text
+ws://<mission-api>/ws/voice/<robot-id>?token=<shared-token>
+```
+
+The car sends `hello`, `turn.start`, 16 kHz mono signed-16-bit PCM binary
+frames, and `turn.end`. Mission API returns state, final transcript, tool audit,
+reply text, and 24 kHz PCM binary frames between `reply.audio.start` and
+`reply.audio.end`. A car can have only one active voice socket and one active
+turn. Disconnecting cancels the turn and triggers a best-effort stop.
+
+The model can only call status, lights, 50–1000 ms beep, stop, camera observe,
+100–1000 ms movement, and an explicit 15–180 degree in-place turn. All arguments are validated again by
+Pydantic; movement is fixed at 0.22 m/s or 0.9 rad/s, carries a vehicle TTL,
+and sends a second stop in `finally`. Navigation and patrol are not exposed.
+
+Conversation sessions store transcript, reply, validated tool audit, latency,
+and errors in PostgreSQL. Raw microphone and synthesized audio are never
+persisted. Run `alembic upgrade head` after deploying this version.
+
 ## Vehicle Registry
 
 PostgreSQL is authoritative. `configs/fleet/cars.yaml` is only a startup seed:

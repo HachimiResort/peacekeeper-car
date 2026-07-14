@@ -20,6 +20,12 @@ mission_api/api/__init__.py
 mission_api/api/maps.py
 mission_api/api/operations.py
 mission_api/api/robots.py
+mission_api/api/shows.py
+mission_api/voice/__init__.py
+mission_api/voice/gateway.py
+mission_api/voice/orchestrator.py
+mission_api/voice/providers.py
+mission_api/voice/tools.py
 peacekeeper_mission_api.egg-info/PKG-INFO
 peacekeeper_mission_api.egg-info/SOURCES.txt
 peacekeeper_mission_api.egg-info/dependency_links.txt
@@ -30,3 +36,5 @@ tests/test_map_bundle.py
 tests/test_openapi_contract.py
 tests/test_runtime.py
 tests/test_seed_and_security.py
+tests/test_views.py
+tests/test_voice.py

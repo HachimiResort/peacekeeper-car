@@ -22,6 +22,8 @@ from .runtime import StatusAggregator, WebSocketHub
 from .security import verify_http_token, verify_websocket_token
 from .seed import seed_robots
 from .schemas import ErrorResponse
+from .voice import ArkResponsesClient, ConversationOrchestrator, RobotToolExecutor, VolcASRClient, VolcTTSClient
+from .voice.gateway import VoiceConnectionRegistry, voice_websocket
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.status_aggregator = aggregator
         app.state.map_service = MapService(settings.map_storage_dir, settings.max_map_bytes)
         app.state.show_tasks = {}
+        app.state.voice_connections = VoiceConnectionRegistry()
+        app.state.voice_asr = None
+        app.state.voice_tts = None
+        app.state.voice_ark = None
+        app.state.conversation_orchestrator = None
+        if settings.voice_configured:
+            app.state.voice_asr = VolcASRClient(
+                settings.volc_speech_app_id,
+                settings.volc_speech_access_token,
+                settings.volc_asr_resource_id,
+                settings.volc_asr_url,
+                settings.voice_provider_timeout_s,
+            )
+            app.state.voice_tts = VolcTTSClient(
+                settings.volc_speech_app_id,
+                settings.volc_speech_access_token,
+                settings.volc_tts_resource_id,
+                settings.volc_tts_voice,
+                settings.volc_tts_url,
+                settings.voice_provider_timeout_s,
+            )
+            app.state.voice_ark = ArkResponsesClient(
+                settings.ark_api_key,
+                settings.ark_model,
+                settings.ark_base_url,
+                settings.voice_provider_timeout_s,
+            )
+            app.state.conversation_orchestrator = ConversationOrchestrator(
+                app.state.voice_ark,
+                RobotToolExecutor(agent, settings.voice_max_image_bytes),
+                settings.voice_max_tool_rounds,
+            )
         async with db.sessions() as session:
             await seed_robots(session, settings.cars_file)
             await MissionRepository.reconcile_interrupted(session)
@@ -66,6 +100,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             for task in app.state.show_tasks.values(): task.cancel()
             await aggregator.stop()
+            if app.state.voice_ark is not None:
+                await app.state.voice_ark.close()
+            if app.state.voice_tts is not None:
+                await app.state.voice_tts.close()
             await agent.close()
             await db.close()
 
@@ -160,6 +198,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             pass
         finally:
             await websocket.app.state.ws_hub.unsubscribe(queue)
+
+    @app.websocket("/ws/voice/{robot_id}")
+    async def robot_voice_websocket(websocket: WebSocket, robot_id: str):
+        await voice_websocket(websocket, robot_id)
 
     app.include_router(robots_router)
     app.include_router(operations_router)

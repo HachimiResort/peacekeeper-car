@@ -1,4 +1,4 @@
-import type { AlertRecord, AudioAsset, AudioStatus, HazardStatus, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, ShowScore, StatusSubscriptionObserver, StoredMap, VehicleSavedMap, VisionCapture, VisionStatus } from "../api/types"
+import type { AlertRecord, AudioAsset, AudioStatus, HazardStatus, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, ShowScore, StatusSubscriptionObserver, StoredMap, VehicleSavedMap, VisionCapture, VisionStatus, VoiceStatus } from "../api/types"
 
 const now = new Date()
 const iso = (minutes = 0) => new Date(now.getTime() - minutes * 60_000).toISOString()
@@ -110,6 +110,8 @@ export class DemoMissionApi implements MissionApi {
     if (path === "audio/stop") {
       status.audio = { ...(status.audio as JsonObject), enabled: true, available: true, playing: false, asset: null, pid: null, started_at: null, last_error: null }
     }
+    if (path === "voice/start") status.voice = { ...(status.voice as JsonObject), enabled: true, running: true, state: "wake_listening", connected: true }
+    if (path === "voice/stop") status.voice = { ...(status.voice as JsonObject), running: false, state: "stopped", connected: false }
     if (path === "mapping/start") status.mode = "MAPPING"
     if (path === "mapping/stop") status.mode = "IDLE"
     if (path === "navigation/start") status.navigation = { ready: true, current_map: payload.map_name, action_state: "running", active_goal_id: null }
@@ -151,6 +153,18 @@ export class DemoMissionApi implements MissionApi {
   async audioStatus(robotId: string): Promise<AudioStatus> {
     const status = robots.find((item) => item.id === robotId)?.runtime_status?.audio
     return structuredClone((status || { enabled: true, available: true, playing: false, asset: null, pid: null, loop: false, volume: 80, started_at: null, last_error: null }) as AudioStatus)
+  }
+  async voiceStatus(robotId: string): Promise<VoiceStatus> {
+    const status = robots.find((item) => item.id === robotId)?.runtime_status?.voice
+    return structuredClone((status || {
+      enabled: true, running: true, state: "wake_listening", connected: true,
+      robot_id: robotId, mission_api_configured: true, input_device: "USB Microphone",
+      output_device: "USB Speaker", input_sample_rate: 16000, output_sample_rate: 24000,
+      wake_phrase: "你好", stop_phrase: "停止", kws_ready: true,
+      last_transcript: null, last_reply: null, last_wake_at: null, last_wake_source: null,
+      input_rms: 0.012, input_peak: 0.08, input_overflows: 0, last_input_at: Date.now() / 1000,
+      last_error: null, import_error: null,
+    }) as VoiceStatus)
   }
   async uploadAudio(_robotId: string, file: File) {
     const name = file.name

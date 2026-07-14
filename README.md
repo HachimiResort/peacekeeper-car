@@ -30,6 +30,25 @@ load saved map -> set AMCL initial pose -> send Nav2 goal
 -> build or load a multi-point patrol route -> pause/resume/cancel safely
 ```
 
+The optional Doubao voice loop keeps the language model and credentials in
+Mission API while the car owns audio, wake-word detection, and the final
+safety stop:
+
+```text
+“你好” -> local KWS -> Volcengine ASR -> Ark Responses + validated tools
+-> short TTL-limited car action -> Seed TTS PCM -> car speaker
+```
+
+Before enabling it, run `python3 tools/install_kws_model.py`. The installer
+reuses the approximately 5 MiB INT8 model from the adjacent historical Group 5
+materials when available. Set the seven `PEACEKEEPER_ARK_*` and
+`PEACEKEEPER_VOLC_*` values shown in `.env.example`, then configure the car's
+`voice.mission_api_url`, `voice.robot_id`, and `voice.enabled`. The shared token
+is injected from `PEACEKEEPER_SHARED_TOKEN`; do not put provider credentials in
+the vehicle YAML. Put a fixed Mandarin service-failure recording at
+`data/audio/voice-service-error.wav`; if it is absent, the gateway uses a local
+warning beep instead and remains in `degraded` state.
+
 The intended direct-mode control ownership rule is strict: fleet-agent is the
 only process that writes `/dev/myserial`. It subscribes to ROS2 `/cmd_vel`,
 arbitrates that stream against manual control and emergency stop, then calls
@@ -88,3 +107,5 @@ setup.
 - `POST /api/mapping/start` - start lidar and SLAM.
 - `POST /api/mapping/save` - save the current map.
 - `POST /api/video/snapshot` - save a current first-person frame.
+- `GET /api/voice/status` - local KWS, audio device, and Mission API diagnostics.
+- `POST /api/voice/start` / `POST /api/voice/stop` - maintain the car-side voice gateway.

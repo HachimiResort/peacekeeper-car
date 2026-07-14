@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertOctagon, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Ban, BellRing, ChevronDown, ChevronUp, Crosshair, Lightbulb, LightbulbOff, MapPinned, Music2, Pause, Play, RotateCcw, Save, Square, Trash2, Upload, Volume2, Waypoints, X } from "lucide-react"
+import { AlertOctagon, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Ban, BellRing, ChevronDown, ChevronUp, Crosshair, Lightbulb, LightbulbOff, MapPinned, Mic, Music2, Pause, Play, RotateCcw, Save, Square, Trash2, Upload, Volume2, Waypoints, X } from "lucide-react"
 import { Link, useParams } from "react-router-dom"
 import { useFeedback } from "../app/feedback"
 import { useLiveStatus } from "../app/live-status"
@@ -7,7 +7,7 @@ import { useSession } from "../app/session"
 import { useAsyncAction } from "../app/use-async-action"
 import { degreesToRadians } from "../api/client"
 import { MotionCommander } from "../api/motion"
-import type { AudioAsset, AudioStatus, MapDeployment, MapPoint, Robot, StoredMap } from "../api/types"
+import type { AudioAsset, AudioStatus, MapDeployment, MapPoint, Robot, StoredMap, VoiceStatus } from "../api/types"
 import { CameraPreview } from "../components/camera-preview"
 import { LiveMapPreview } from "../components/live-map-preview"
 import { HazardPanel } from "../components/hazard-panel"
@@ -16,7 +16,7 @@ import { VisionDetectionCard } from "../components/vision-detection-card"
 import { Badge, Button, Card, EmptyState, InlineActionStatus, JsonPanel, LoadingBlock, PageHeader, StatusDot, fieldClass } from "../components/ui"
 
 type Direction = "forward" | "backward" | "left" | "right"
-type PanelName = "control" | "effects" | "mapping" | "navigation" | "patrol"
+type PanelName = "control" | "effects" | "voice" | "mapping" | "navigation" | "patrol"
 type PanelState = { tone: "info" | "success" | "error" | "warning"; title: string; detail?: string }
 
 const motion: Record<Direction, { linear_x: number; angular_z: number }> = {
@@ -34,6 +34,9 @@ const labels: Record<string, { pending: string; success: string; panel: PanelNam
   "audio/play": { pending: "正在播放音频", success: "音频播放指令已下发", panel: "effects" },
   "audio/stop": { pending: "正在停止音频", success: "停止音频指令已下发", panel: "effects" },
   "audio/upload": { pending: "正在分发音频", success: "音频已安装到本车", panel: "effects" },
+  "voice/start": { pending: "正在启动语音", success: "豆包语音已启动", panel: "voice" },
+  "voice/stop": { pending: "正在停止语音", success: "豆包语音已停止", panel: "voice" },
+  "voice/trigger-wake": { pending: "正在模拟唤醒", success: "已绕过 KWS，请直接说指令", panel: "voice" },
   "mapping/start": { pending: "正在启动", success: "建图指令已下发", panel: "mapping" },
   "mapping/stop": { pending: "正在停止", success: "停止 SLAM 指令已下发", panel: "mapping" },
   "mapping/save": { pending: "正在保存", success: "地图已保存并导入中心", panel: "mapping" },
@@ -62,6 +65,7 @@ export function RobotDetailPage() {
   const [deployments, setDeployments] = useState<MapDeployment[]>([])
   const [audioAssets, setAudioAssets] = useState<AudioAsset[]>([])
   const [audioStatus, setAudioStatus] = useState<AudioStatus | null>(null)
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
   const [audioFile, setAudioFile] = useState<File | null>(null)
   const [selectedDeployment, setSelectedDeployment] = useState("")
   const [selectedPoint, setSelectedPoint] = useState<MapPoint | null>(null)
@@ -84,14 +88,18 @@ export function RobotDetailPage() {
   const load = useCallback(async () => {
     if (!api) return
     try {
-      const [nextRobot, nextMaps, nextDeployments, nextAudioAssets, nextAudioStatus] = await Promise.all([
+      // Some demo/test adapters predate voice diagnostics; keep the rest of the
+      // vehicle page usable while those adapters are being upgraded.
+      const voiceStatusRequest = typeof api.voiceStatus === "function" ? api.voiceStatus(robotId).catch(() => null) : Promise.resolve(null)
+      const [nextRobot, nextMaps, nextDeployments, nextAudioAssets, nextAudioStatus, nextVoiceStatus] = await Promise.all([
         api.robot(robotId),
         api.maps(),
         api.deployments({ robot_id: robotId, state: "installed", limit: "200" }),
         api.audioAssets(robotId).catch(() => []),
         api.audioStatus(robotId).catch(() => null),
+        voiceStatusRequest,
       ])
-      setRobot(nextRobot); setMaps(nextMaps); setDeployments(nextDeployments.items); setAudioAssets(nextAudioAssets); setAudioStatus(nextAudioStatus); setLoadError("")
+      setRobot(nextRobot); setMaps(nextMaps); setDeployments(nextDeployments.items); setAudioAssets(nextAudioAssets); setAudioStatus(nextAudioStatus); setVoiceStatus(nextVoiceStatus); setLoadError("")
       setSelectedDeployment((current) => current || nextDeployments.items[0]?.id || "")
       setSelectedAudio((current) => current || nextAudioAssets[0]?.name || "")
     } catch (cause) {
@@ -101,7 +109,10 @@ export function RobotDetailPage() {
 
   useEffect(() => {
     void load()
-    const interval = window.setInterval(() => api?.robot(robotId).then(setRobot).catch(() => undefined), 2500)
+    const interval = window.setInterval(() => {
+      api?.robot(robotId).then(setRobot).catch(() => undefined)
+      api?.voiceStatus(robotId).then(setVoiceStatus).catch(() => undefined)
+    }, 1000)
     return () => window.clearInterval(interval)
   }, [api, robotId, load])
 
@@ -173,7 +184,7 @@ export function RobotDetailPage() {
 
   const live = statuses[robot.id]
   const currentRobot = live ? { ...robot, online: Boolean(live.online), runtime_status: (live.status as Record<string, unknown>) || robot.runtime_status, last_seen: String(live.last_seen || robot.last_seen || "") || null } : robot
-  const runtime = currentRobot.runtime_status as { mode?: string; processes?: Record<string, string>; navigation?: Record<string, unknown>; patrol?: Record<string, unknown>; video?: { streaming?: boolean; device?: string }; audio?: AudioStatus; last_error?: string } | null
+  const runtime = currentRobot.runtime_status as { mode?: string; processes?: Record<string, string>; navigation?: Record<string, unknown>; patrol?: Record<string, unknown>; video?: { streaming?: boolean; device?: string }; audio?: AudioStatus; voice?: VoiceStatus; last_error?: string } | null
   const navigation = runtime?.navigation || {}
   const patrol = runtime?.patrol || {}
   const mode = runtime?.mode || "UNKNOWN"
@@ -195,6 +206,7 @@ export function RobotDetailPage() {
   const effectsAvailable = currentRobot.enabled && currentRobot.online
   const effectBusy = ["control/lights", "control/buzzer", "audio/play", "audio/stop", "audio/upload"].some(actions.isPending)
   const currentAudioStatus = audioStatus || runtime?.audio
+  const currentVoiceStatus = voiceStatus || runtime?.voice
   const normalizedBuzzerDuration = Math.min(60_000, Math.max(10, Number(buzzerDuration) || 10))
 
   const confirmThen = async (input: { title: string; description: string; confirmLabel: string; tone?: "primary" | "danger" | "warning" }, callback: () => unknown | Promise<unknown>) => {
@@ -264,6 +276,31 @@ export function RobotDetailPage() {
           <div className="effect-actions"><Button variant="primary" loading={actions.isPending("audio/play")} loadingText="正在播放" disabled={!effectsAvailable || !selectedAudio || effectBusy} onClick={() => void perform("audio/play", { asset: selectedAudio, volume: audioVolume, loop: audioLoop })}><Play />播放</Button><Button loading={actions.isPending("audio/stop")} loadingText="正在停止" disabled={!effectsAvailable || !currentAudioStatus?.playing || effectBusy} onClick={() => void perform("audio/stop")}><Square />停止音频</Button></div>
         </div>
         {panelState.effects ? <InlineActionStatus {...panelState.effects} /> : <InlineActionStatus tone={currentAudioStatus?.last_error ? "warning" : currentAudioStatus?.playing ? "success" : "info"} title={currentAudioStatus?.last_error ? "音频服务报告异常" : currentAudioStatus?.playing ? "音频正在播放" : "等待声光测试"} detail={currentAudioStatus?.last_error || (!audioAssets.length ? "选择文件后点击上传，中心端会将其安装到本车 data/audio。" : effectsAvailable ? "声光控制不会改变底盘运动状态。" : "车辆需在线并启用后才可下发声光指令。")} />}
+      </Card>
+
+      <Card className="panel voice-panel">
+        <div className="panel-head"><div><h2>豆包语音诊断</h2><p>主要入口在车端；此处只用于查看状态和维护启停</p></div><Mic /></div>
+        <div className="robot-summary">
+          <Card><span>状态</span><strong>{currentVoiceStatus?.state || "unknown"}</strong></Card>
+          <Card><span>唤醒词</span><strong>{currentVoiceStatus?.wake_phrase || "你好"}</strong></Card>
+          <Card><span>本地 KWS</span><strong>{currentVoiceStatus?.kws_ready ? "就绪" : "未就绪"}</strong></Card>
+          <Card><span>中心连接</span><strong>{currentVoiceStatus?.connected ? "已连接" : "未连接"}</strong></Card>
+          <Card><span>麦克风 RMS</span><strong>{Number(currentVoiceStatus?.input_rms || 0).toFixed(4)}</strong></Card>
+          <Card><span>输入峰值</span><strong>{Number(currentVoiceStatus?.input_peak || 0).toFixed(4)}</strong></Card>
+          <Card><span>音频溢出</span><strong>{currentVoiceStatus?.input_overflows || 0}</strong></Card>
+          <Card><span>唤醒来源</span><strong>{currentVoiceStatus?.last_wake_source || "尚未唤醒"}</strong></Card>
+        </div>
+        <div className="effect-block">
+          <div className="effect-copy"><strong>音频设备</strong><span>输入：{currentVoiceStatus?.input_device || "自动选择"}</span><span>输出：{currentVoiceStatus?.output_device || "自动选择"}</span></div>
+          <div className="effect-actions">
+            <Button variant="primary" loading={actions.isPending("voice/start")} loadingText="正在启动" disabled={!currentRobot.online || Boolean(currentVoiceStatus?.running)} onClick={() => void perform("voice/start")}><Play />启动语音</Button>
+            <Button loading={actions.isPending("voice/stop")} loadingText="正在停止" disabled={!currentRobot.online || !currentVoiceStatus?.running} onClick={() => void perform("voice/stop")}><Square />停止语音</Button>
+            <Button variant="warning" loading={actions.isPending("voice/trigger-wake")} loadingText="正在触发" disabled={!currentRobot.online || !currentVoiceStatus?.running || !currentVoiceStatus?.connected || currentVoiceStatus?.state !== "wake_listening"} onClick={() => void perform("voice/trigger-wake")}><Mic />模拟“{currentVoiceStatus?.wake_phrase || "你好"}”</Button>
+          </div>
+        </div>
+        {currentVoiceStatus?.last_transcript && <div className="effect-copy"><strong>最后转写</strong><span>{currentVoiceStatus.last_transcript}</span></div>}
+        {currentVoiceStatus?.last_reply && <div className="effect-copy"><strong>最后回复</strong><span>{currentVoiceStatus.last_reply}</span></div>}
+        {panelState.voice ? <InlineActionStatus {...panelState.voice} /> : <InlineActionStatus tone={currentVoiceStatus?.last_error || currentVoiceStatus?.import_error ? "warning" : currentVoiceStatus?.running ? "success" : "info"} title={currentVoiceStatus?.running ? "语音网关正在运行" : "语音网关未运行"} detail={currentVoiceStatus?.last_error || currentVoiceStatus?.import_error || (!currentVoiceStatus?.mission_api_configured ? "车端未配置 Mission API 语音连接参数。" : `说“${currentVoiceStatus?.wake_phrase || "你好"}”开始对话，说“停止”可本地停车。`)} />}
       </Card>
 
       <Card className="panel mapping-panel">
