@@ -2,6 +2,7 @@ import type {
   AlertRecord,
   AudioAsset,
   AudioStatus,
+  VoiceStatus,
   JsonObject,
   LiveMapStatus,
   MapDeployment,
@@ -93,6 +94,9 @@ export class HttpMissionApi implements MissionApi {
   }
   async audioStatus(robotId: string) {
     return this.request<AudioStatus>(`/api/robots/${encodeURIComponent(robotId)}/audio/status`)
+  }
+  async voiceStatus(robotId: string) {
+    return this.request<VoiceStatus>(`/api/robots/${encodeURIComponent(robotId)}/voice/status`)
   }
   async uploadAudio(robotId: string, file: File) {
     const form = new FormData()

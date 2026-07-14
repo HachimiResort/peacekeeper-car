@@ -5,7 +5,7 @@ from typing import Optional
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import Alert, Event, MapDeployment, Mission, Robot, StoredMap
+from .models import Alert, ConversationSession, ConversationTurn, Event, MapDeployment, Mission, Robot, StoredMap
 
 
 class RobotRepository:
@@ -110,3 +110,67 @@ class EventRepository:
     async def list(session: AsyncSession, limit: int = 200) -> list[Event]:
         statement = select(Event).order_by(Event.received_at.desc()).limit(limit)
         return list((await session.scalars(statement)).all())
+
+
+class ConversationRepository:
+    @staticmethod
+    async def create_session(session: AsyncSession, robot_id: str) -> ConversationSession:
+        item = ConversationSession(robot_id=robot_id)
+        session.add(item)
+        await session.commit()
+        await session.refresh(item)
+        return item
+
+    @staticmethod
+    async def close_session(session: AsyncSession, item: ConversationSession) -> None:
+        item.state = "closed"
+        item.ended_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    @staticmethod
+    async def create_turn(
+        session: AsyncSession,
+        conversation_id: uuid.UUID,
+        robot_id: str,
+        transcript: str,
+    ) -> ConversationTurn:
+        item = ConversationTurn(session_id=conversation_id, robot_id=robot_id, transcript=transcript)
+        session.add(item)
+        await session.commit()
+        await session.refresh(item)
+        return item
+
+    @staticmethod
+    async def set_transcript(session: AsyncSession, turn: ConversationTurn, transcript: str) -> None:
+        turn.transcript = transcript
+        await session.commit()
+
+    @staticmethod
+    async def set_turn_content(
+        session: AsyncSession,
+        turn: ConversationTurn,
+        reply: str,
+        tool_calls: list[dict],
+    ) -> None:
+        turn.reply = reply
+        turn.tool_calls = tool_calls
+        await session.commit()
+
+    @staticmethod
+    async def finish_turn(
+        session: AsyncSession,
+        turn: ConversationTurn,
+        reply: str,
+        tool_calls: list[dict],
+        latency_ms: int,
+    ) -> None:
+        turn.reply = reply
+        turn.tool_calls = tool_calls
+        turn.latency_ms = latency_ms
+        await session.commit()
+
+    @staticmethod
+    async def fail_turn(session: AsyncSession, turn: ConversationTurn, error: str, latency_ms: int) -> None:
+        turn.error = error
+        turn.latency_ms = latency_ms
+        await session.commit()

@@ -190,6 +190,8 @@ export interface AudioStatus {
   last_error: string | null
 }
 
+export type VoiceStatus = Schemas["VoiceStatusResponse"]
+
 export interface MissionApi {
   health(): Promise<boolean>
   overview(): Promise<Overview>
@@ -205,6 +207,7 @@ export interface MissionApi {
   navigationStop(id: string): Promise<JsonObject>
   audioAssets(robotId: string): Promise<AudioAsset[]>
   audioStatus(robotId: string): Promise<AudioStatus>
+  voiceStatus(robotId: string): Promise<VoiceStatus>
   uploadAudio(robotId: string, file: File): Promise<JsonObject>
   fleetStop(): Promise<JsonObject>
   shows(): Promise<ShowScore[]>

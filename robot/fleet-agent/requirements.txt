@@ -5,3 +5,7 @@ PyYAML>=6
 psutil>=5.9
 python-multipart>=0.0.9
 Jinja2>=3.1
+numpy>=1.24,<3
+sounddevice>=0.5,<1
+sherpa-onnx>=1.10,<2
+websockets>=12,<16

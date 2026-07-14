@@ -113,6 +113,34 @@ class AudioConfig:
 
 
 @dataclass
+class VoiceConfig:
+    """Local wake-word, microphone, and Mission API voice bridge settings."""
+
+    enabled: bool = False
+    auto_start: bool = True
+    robot_id: str = "car_1"
+    mission_api_url: str = ""
+    mission_api_token: str = ""
+    input_device: Optional[str] = None
+    output_device: Optional[str] = None
+    input_sample_rate: int = 16000
+    output_sample_rate: int = 24000
+    wake_phrase: str = "你好"
+    stop_phrase: str = "停止"
+    kws_model_dir: str = "/root/peacekeeper-car/models/kws"
+    keywords_score: float = 1.5
+    keywords_threshold: float = 0.20
+    kws_input_gain: float = 1.5
+    vad_rms_threshold: float = 0.015
+    silence_ms: int = 800
+    max_utterance_s: float = 15.0
+    followup_timeout_s: float = 20.0
+    connect_timeout_s: float = 8.0
+    reconnect_s: float = 2.0
+    local_error_asset: str = "voice-service-error.wav"
+
+
+@dataclass
 class ProcessConfig:
     name: str
     command: str
@@ -155,6 +183,7 @@ class AgentConfig:
     hazards: HazardConfig = field(default_factory=HazardConfig)
     control: ControlConfig = field(default_factory=ControlConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     processes: Dict[str, ProcessConfig] = field(
         default_factory=lambda: {
             "lidar": ProcessConfig(
@@ -199,6 +228,7 @@ def _to_dict(config: AgentConfig) -> dict:
         "hazards": vars(config.hazards),
         "control": vars(config.control),
         "audio": vars(config.audio),
+        "voice": vars(config.voice),
         "processes": {key: vars(value) for key, value in config.processes.items()},
         "mapping": vars(config.mapping),
         "patrol": vars(config.patrol),
@@ -227,6 +257,7 @@ def _from_dict(raw: dict) -> AgentConfig:
         hazards=HazardConfig(**raw.get("hazards", {})),
         control=ControlConfig(**raw.get("control", {})),
         audio=AudioConfig(**raw.get("audio", {})),
+        voice=VoiceConfig(**raw.get("voice", {})),
         processes=processes or AgentConfig().processes,
         mapping=MappingConfig(**raw.get("mapping", {})),
         patrol=PatrolConfig(**raw.get("patrol", {})),
@@ -240,6 +271,7 @@ def load_config(path: Optional[str] = None) -> AgentConfig:
         env_token = os.environ.get("PEACEKEEPER_SHARED_TOKEN")
         if env_token:
             default.security.shared_token = env_token
+            default.voice.mission_api_token = env_token
         return default
 
     if yaml is None:
@@ -254,4 +286,6 @@ def load_config(path: Optional[str] = None) -> AgentConfig:
     env_token = os.environ.get("PEACEKEEPER_SHARED_TOKEN")
     if env_token:
         config.security.shared_token = env_token
+        if not config.voice.mission_api_token:
+            config.voice.mission_api_token = env_token
     return config

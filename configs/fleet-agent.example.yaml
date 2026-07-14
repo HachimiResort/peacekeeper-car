@@ -19,6 +19,18 @@ audio:
   asset_dir: /root/peacekeeper-car/data/audio
   max_asset_bytes: 67108864
 
+voice:
+  enabled: false
+  auto_start: true
+  robot_id: car_1
+  mission_api_url: ""
+  input_device: null
+  output_device: null
+  wake_phrase: 你好
+  stop_phrase: 停止
+  kws_model_dir: /root/peacekeeper-car/models/kws
+  local_error_asset: voice-service-error.wav
+
 ros:
   distro_setup: /opt/ros/foxy/setup.bash
   workspace_setup: /root/yahboomcar_ros2_ws/yahboomcar_ws/install/setup.bash

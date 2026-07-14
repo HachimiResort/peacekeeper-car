@@ -321,6 +321,33 @@ class OverviewResponse(BaseModel):
     maps: dict[str, Any]
 
 
+class VoiceStatusResponse(BaseModel):
+    ok: bool = True
+    enabled: bool
+    running: bool
+    state: str
+    connected: bool
+    robot_id: str
+    mission_api_configured: bool
+    input_device: Optional[str] = None
+    output_device: Optional[str] = None
+    input_sample_rate: int
+    output_sample_rate: int
+    wake_phrase: str
+    stop_phrase: str
+    kws_ready: bool
+    last_transcript: Optional[str] = None
+    last_reply: Optional[str] = None
+    last_wake_at: Optional[float] = None
+    last_wake_source: Optional[str] = None
+    input_rms: float = 0.0
+    input_peak: float = 0.0
+    input_overflows: int = 0
+    last_input_at: Optional[float] = None
+    last_error: Optional[str] = None
+    import_error: Optional[str] = None
+
+
 class ErrorBody(BaseModel):
     code: str
     message: str

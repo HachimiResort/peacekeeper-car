@@ -128,3 +128,27 @@ class Show(Base):
     score: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ConversationSession(Base):
+    __tablename__ = "conversation_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    robot_id: Mapped[str] = mapped_column(ForeignKey("robots.id"), index=True)
+    state: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ConversationTurn(Base):
+    __tablename__ = "conversation_turns"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversation_sessions.id"), index=True)
+    robot_id: Mapped[str] = mapped_column(ForeignKey("robots.id"), index=True)
+    transcript: Mapped[str] = mapped_column(Text)
+    reply: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tool_calls: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, default=list)
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

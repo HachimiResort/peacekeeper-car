@@ -29,6 +29,7 @@ from .schemas import AudioPlayRequest, BuzzerControlRequest, CmdVelRequest, Ligh
 from .state import Mode, RuntimeState
 from .video import VideoService
 from .vision import VisionCaptureService, VisionService, VisionUnavailable, VisionWorkerClient
+from .voice_gateway import VoiceGateway
 
 
 async def _run_blocking(func, *args, **kwargs):
@@ -75,6 +76,12 @@ def create_app(config: AgentConfig) -> FastAPI:
         config.safety,
         manual_override_s=config.control.manual_override_s,
         motion_sink=direct_odom,
+    )
+    voice = VoiceGateway(
+        config.voice,
+        cmd_vel.stop,
+        rosmaster.control_buzzer,
+        lambda: audio.play(config.voice.local_error_asset, loop=False, volume=80),
     )
     show = ShowService(cmd_vel, rosmaster, state)
     direct_cmd_vel = DirectCmdVelSubscriber(
@@ -154,9 +161,12 @@ def create_app(config: AgentConfig) -> FastAPI:
             except Exception as exc:
                 state.set_error(f"Direct /cmd_vel subscriber failed: {exc}")
         event_outbox.start()
+        if config.voice.enabled and config.voice.auto_start:
+            voice.start()
         try:
             yield
         finally:
+            voice.shutdown()
             event_outbox.shutdown()
             vision_capture.shutdown()
             patrol.shutdown()
@@ -215,6 +225,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             "process_details": process_status,
             "video": video.status(),
             "audio": audio.status(),
+            "voice": voice.status(),
             "vision": vision_capture.status(),
             "navigation": navigation.status(),
             "patrol": patrol.status(),
@@ -543,6 +554,24 @@ def create_app(config: AgentConfig) -> FastAPI:
     @app.get("/api/audio/status")
     async def audio_status():
         return JSONResponse(await _run_blocking(audio.status))
+
+    @app.get("/api/voice/status")
+    async def voice_status():
+        return JSONResponse({"ok": True, **await _run_blocking(voice.status)})
+
+    @app.post("/api/voice/start")
+    async def voice_start():
+        status = await _run_blocking(voice.start)
+        return JSONResponse({"ok": status.get("state") not in {"disabled", "degraded"}, **status})
+
+    @app.post("/api/voice/stop")
+    async def voice_stop():
+        return JSONResponse({"ok": True, **await _run_blocking(voice.stop)})
+
+    @app.post("/api/voice/trigger-wake")
+    async def voice_trigger_wake():
+        result = await _run_blocking(voice.trigger_wake)
+        return JSONResponse(result, status_code=202 if result.get("accepted") else 409)
 
     @app.post("/api/audio/install")
     async def audio_install(bundle: UploadFile = File(...)):
