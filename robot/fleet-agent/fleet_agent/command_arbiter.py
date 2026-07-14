@@ -51,6 +51,8 @@ class CommandArbiter:
         zero = self._is_zero(linear_x, linear_y, angular_z)
         if self.state.mode == Mode.LASER_TRACKING and not zero:
             return self._reject("manual", "Laser tracking is active; stop tracking before manual control")
+        if self.state.mode == Mode.SHOW and not zero:
+            return self._reject("manual", "Show is active; abort the show before manual control")
 
         try:
             self.controller.publish(linear_x, linear_y, angular_z, ttl_ms=ttl_ms)
@@ -110,6 +112,14 @@ class CommandArbiter:
         )
         return self._ok("ros")
 
+    def handle_show_command(self, linear_x: float = 0.0, linear_y: float = 0.0, angular_z: float = 0.0, ttl_ms: Optional[int] = None) -> dict:
+        if self.state.estop or self.state.mode != Mode.SHOW:
+            return self._reject("show", "show is not active")
+        self.controller.publish(linear_x, linear_y, angular_z, ttl_ms=ttl_ms or self.safety.default_ttl_ms)
+        with self.lock: self._accept_unlocked("show", linear_x, linear_y, angular_z)
+        self._notify_motion(linear_x, linear_y, angular_z, ttl_ms or self.safety.default_ttl_ms)
+        return self._ok("show")
+
     def publish(self, linear_x: float, linear_y: float, angular_z: float, ttl_ms: Optional[int] = None) -> dict:
         return self.handle_ros_command(linear_x, linear_y, angular_z, ttl_ms=ttl_ms)
 
@@ -131,7 +141,7 @@ class CommandArbiter:
             self.manual_override_until = 0.0
             self.last_command = {"linear_x": 0.0, "linear_y": 0.0, "angular_z": 0.0}
             self.last_source = "stop"
-        if not self.state.estop and self.state.mode in (Mode.MANUAL, Mode.LASER_TRACKING, Mode.NAV_PATROL):
+        if not self.state.estop and self.state.mode in (Mode.MANUAL, Mode.LASER_TRACKING, Mode.NAV_PATROL, Mode.SHOW):
             self.state.set_mode(Mode.IDLE)
 
     def shutdown(self) -> None:

@@ -12,6 +12,7 @@ from uuid import uuid4
 class Mode(str, Enum):
     IDLE = "IDLE"
     MANUAL = "MANUAL"
+    SHOW = "SHOW"
     MAPPING = "MAPPING"
     NAV_PATROL = "NAV_PATROL"
     HAZARD_HOLD = "HAZARD_HOLD"

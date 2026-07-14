@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Activity, Bell, Bot, ChevronRight, Command, Database, FlaskConical, LogOut, Map, Menu, Moon, Octagon, ScrollText, Sun, X } from "lucide-react"
+import { Activity, Bell, Bot, ChevronRight, Command, Database, FlaskConical, LogOut, Map, Menu, Moon, Music, Octagon, ScrollText, Sun, X } from "lucide-react"
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import { useSession } from "../app/session"
 import { useFeedback } from "../app/feedback"
@@ -14,6 +14,7 @@ const navigation = [
   { to: "/missions", label: "任务记录", icon: ScrollText },
   { to: "/events", label: "事件与告警", icon: Bell },
   { to: "/fleet-lab", label: "联动实验", icon: FlaskConical },
+  { to: "/shows", label: "演出编排", icon: Music },
 ]
 
 export function AppShell() {

@@ -18,6 +18,7 @@ import type {
   VisionCapture,
   VisionStatus,
   HazardStatus,
+  ShowScore,
 } from "./types"
 
 export class ApiError extends Error {
@@ -99,6 +100,12 @@ export class HttpMissionApi implements MissionApi {
     return this.request<JsonObject>(`/api/robots/${encodeURIComponent(robotId)}/audio/upload`, { method: "POST", body: form })
   }
   async fleetStop() { return this.request<JsonObject>("/api/fleet/stop", { method: "POST", body: "{}" }) }
+  async shows() { return (await this.request<{ shows: ShowScore[] }>("/api/shows")).shows }
+  async createShow(payload: Pick<ShowScore, "name" | "score">) { return this.request<ShowScore>("/api/shows", { method: "POST", body: JSON.stringify(payload) }) }
+  async updateShow(id: string, payload: Pick<ShowScore, "name" | "score">) { return this.request<ShowScore>(`/api/shows/${id}`, { method: "PUT", body: JSON.stringify(payload) }) }
+  async startShow(id: string) { return this.request<JsonObject>(`/api/shows/${id}/start`, { method: "POST", body: "{}" }) }
+  async abortShow(id: string) { return this.request<JsonObject>(`/api/shows/${id}/abort`, { method: "POST", body: "{}" }) }
+  async serverTime() { return this.request<{ utc: string; epoch_ms: number }>("/api/shows/time/now") }
   async maps() { return (await this.request<{ maps: StoredMap[] }>("/api/maps")).maps }
   async map(id: string) { return this.request<StoredMap>(`/api/maps/${id}`) }
   async mapPreview(id: string) { return this.blob(`/api/maps/${id}/preview.png`) }

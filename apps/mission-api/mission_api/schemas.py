@@ -47,6 +47,11 @@ class ManualCommand(BaseModel):
     source: str = "mission-api"
 
 
+class ShowCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    score: dict[str, Any]
+
+
 class LightControlCommand(BaseModel):
     left: bool = True
     right: bool = True

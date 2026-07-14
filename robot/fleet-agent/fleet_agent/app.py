@@ -24,6 +24,7 @@ from .process_manager import ProcessManager
 from .range_estimation import TargetRangeEstimator
 from .ros_control import DirectCmdVelSubscriber, DirectOdomPublisher, LiveMapSubscriber
 from .rosmaster_control import RosmasterController
+from .show import ShowService
 from .schemas import AudioPlayRequest, BuzzerControlRequest, CmdVelRequest, LightControlRequest, HazardHoldRequest, HazardMonitorRequest, NavigationPoseRequest, NavigationStartRequest, PatrolStartRequest, ProcessRequest, SaveMapRequest
 from .state import Mode, RuntimeState
 from .video import VideoService
@@ -75,6 +76,7 @@ def create_app(config: AgentConfig) -> FastAPI:
         manual_override_s=config.control.manual_override_s,
         motion_sink=direct_odom,
     )
+    show = ShowService(cmd_vel, rosmaster, state)
     direct_cmd_vel = DirectCmdVelSubscriber(
         config.ros.cmd_vel_topic,
         cmd_vel,
@@ -215,6 +217,7 @@ def create_app(config: AgentConfig) -> FastAPI:
             "vision": vision_capture.status(),
             "navigation": navigation.status(),
             "patrol": patrol.status(),
+            "show": show.status(),
             "hazards": hazards.status(),
             "ros": ros_status,
             "last_error": state.last_error,
@@ -485,6 +488,22 @@ def create_app(config: AgentConfig) -> FastAPI:
     async def control_cmd_vel(payload: CmdVelRequest):
         return await publish_manual_command(payload)
 
+    @app.post("/api/show/prepare")
+    async def show_prepare(payload: dict):
+        try: return await _run_blocking(show.prepare, payload)
+        except ValueError as exc: return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+
+    @app.post("/api/show/commit")
+    async def show_commit(payload: dict):
+        try: return await _run_blocking(show.commit, payload.get("start_at_utc", ""))
+        except ValueError as exc: return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+
+    @app.post("/api/show/abort")
+    async def show_abort(): return await _run_blocking(show.abort)
+
+    @app.get("/api/show/status")
+    async def show_status(): return await _run_blocking(show.status)
+
     @app.post("/api/control/manual_cmd")
     async def control_manual_cmd(payload: CmdVelRequest):
         return await publish_manual_command(payload)
@@ -562,6 +581,7 @@ def create_app(config: AgentConfig) -> FastAPI:
 
     @app.post("/api/control/stop")
     async def control_stop():
+        await _run_blocking(show.abort)
         if state.mode == Mode.LASER_TRACKING:
             return await stop_laser_tracking()
         try:

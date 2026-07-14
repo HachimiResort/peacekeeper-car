@@ -198,6 +198,12 @@ export interface MissionApi {
   audioStatus(robotId: string): Promise<AudioStatus>
   uploadAudio(robotId: string, file: File): Promise<JsonObject>
   fleetStop(): Promise<JsonObject>
+  shows(): Promise<ShowScore[]>
+  createShow(payload: Pick<ShowScore, "name" | "score">): Promise<ShowScore>
+  updateShow(id: string, payload: Pick<ShowScore, "name" | "score">): Promise<ShowScore>
+  startShow(id: string): Promise<JsonObject>
+  abortShow(id: string): Promise<JsonObject>
+  serverTime(): Promise<{ utc: string; epoch_ms: number }>
   maps(): Promise<StoredMap[]>
   map(id: string): Promise<StoredMap>
   mapPreview(id: string): Promise<Blob>
@@ -227,3 +233,6 @@ export interface MissionApi {
   confirmAlert(id: string, confirmedBy: string, resolution?: string, action?: "acknowledge" | "takeover" | "false_positive" | "resolved"): Promise<JsonObject>
   subscribeStatus(listener: (message: RuntimeStatusMessage) => void, observer?: StatusSubscriptionObserver): () => void
 }
+
+export interface ShowCue { at_tick: number; duration_ticks: number; linear_x?: number; linear_y?: number; angular_z?: number; effect?: string }
+export interface ShowScore { id: string; name: string; score: { bpm: number; beats_per_bar: 4; ticks_per_beat: 2; robot_ids: string[]; audio_name?: string; audio_offset_ms?: number; tracks: Record<string, { motion: ShowCue[]; lights: ShowCue[] }> } }

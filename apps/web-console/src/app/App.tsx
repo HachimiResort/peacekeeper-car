@@ -10,6 +10,7 @@ import { MapDetailPage } from "../features/map-detail-page"
 import { MissionsPage } from "../features/missions-page"
 import { EventsPage } from "../features/events-page"
 import { FleetLabPage } from "../features/fleet-lab-page"
+import { ShowPage } from "../features/show-page"
 
 function RequireSession() {
   const { connected } = useSession()
@@ -30,6 +31,7 @@ export function App() {
         <Route path="missions" element={<MissionsPage />} />
         <Route path="events" element={<EventsPage />} />
         <Route path="fleet-lab" element={<FleetLabPage />} />
+        <Route path="shows" element={<ShowPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

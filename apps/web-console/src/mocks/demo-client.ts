@@ -1,4 +1,4 @@
-import type { AlertRecord, AudioAsset, AudioStatus, HazardStatus, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, StatusSubscriptionObserver, StoredMap, VehicleSavedMap, VisionCapture, VisionStatus } from "../api/types"
+import type { AlertRecord, AudioAsset, AudioStatus, HazardStatus, JsonObject, LiveMapStatus, MapDeployment, Mission, MissionApi, NavigationPose, Overview, Page, Robot, RobotEvent, RuntimeStatusMessage, ShowScore, StatusSubscriptionObserver, StoredMap, VehicleSavedMap, VisionCapture, VisionStatus } from "../api/types"
 
 const now = new Date()
 const iso = (minutes = 0) => new Date(now.getTime() - minutes * 60_000).toISOString()
@@ -69,6 +69,8 @@ function page<T>(items: T[], filters: Record<string, string> = {}): Page<T> {
 export class DemoMissionApi implements MissionApi {
   private listeners = new Set<(message: RuntimeStatusMessage) => void>()
   private goalSequence = 0
+  private showSequence = 0
+  private showScores: ShowScore[] = []
 
   private emit(robot: Robot) {
     const message: RuntimeStatusMessage = { type: "robot_status", robot_id: robot.id, data: { online: robot.online, last_seen: new Date().toISOString(), status: robot.runtime_status } }
@@ -158,6 +160,12 @@ export class DemoMissionApi implements MissionApi {
     return { ok: true, demo: true, result: { asset: { name, bytes: file.size } } }
   }
   async fleetStop() { robots.forEach((robot) => { if (robot.runtime_status) robot.runtime_status.mode = "IDLE" }); return { ok: true, demo: true } }
+  async shows() { return structuredClone(this.showScores) }
+  async createShow(payload: Pick<ShowScore, "name" | "score">) { const value: ShowScore = { id: `show-${++this.showSequence}`, ...structuredClone(payload) }; this.showScores.push(value); return structuredClone(value) }
+  async updateShow(id: string, payload: Pick<ShowScore, "name" | "score">) { const value = this.showScores.find(item => item.id === id); if (!value) throw new Error("演出不存在"); Object.assign(value, structuredClone(payload)); return structuredClone(value) }
+  async startShow(id: string) { if (!this.showScores.some(item => item.id === id)) throw new Error("演出不存在"); return { ok: true, demo: true, start_at_utc: new Date(Date.now() + 5_000).toISOString() } }
+  async abortShow(_id: string) { return { ok: true, demo: true } }
+  async serverTime() { return { utc: new Date().toISOString(), epoch_ms: Date.now() } }
   async maps() { return structuredClone(maps) }
   async map(id: string) { const value = maps.find((item) => item.id === id); if (!value) throw new Error("地图不存在"); return structuredClone(value) }
   async mapPreview(id: string) {

@@ -12,6 +12,7 @@ from .agent_client import FleetAgentClient
 from .api.maps import router as maps_router
 from .api.operations import router as operations_router
 from .api.robots import router as robots_router
+from .api.shows import router as shows_router
 from .config import Settings, get_settings
 from .db import Database
 from .errors import ApiError
@@ -55,6 +56,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.ws_hub = hub
         app.state.status_aggregator = aggregator
         app.state.map_service = MapService(settings.map_storage_dir, settings.max_map_bytes)
+        app.state.show_tasks = {}
         async with db.sessions() as session:
             await seed_robots(session, settings.cars_file)
             await MissionRepository.reconcile_interrupted(session)
@@ -62,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            for task in app.state.show_tasks.values(): task.cancel()
             await aggregator.stop()
             await agent.close()
             await db.close()
@@ -161,6 +164,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(robots_router)
     app.include_router(operations_router)
     app.include_router(maps_router)
+    app.include_router(shows_router)
     return app
 
 
