@@ -16,8 +16,6 @@ data/logs/
 apps/mission-api/.pytest_cache/
 *.mp4
 *.avi
-models/*.engine
-models/*.onnx
 *.tsbuildinfo
 
 extra/
