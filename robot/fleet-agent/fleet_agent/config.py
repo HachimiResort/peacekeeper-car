@@ -85,6 +85,9 @@ class HazardConfig:
     robot_id: str = ""
     mission_api_url: str = ""
     mission_api_token: str = ""
+    alarm_audio_asset: str = ""
+    alarm_audio_volume: int = 100
+    alarm_audio_loop: bool = True
 
 
 @dataclass

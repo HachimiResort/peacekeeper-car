@@ -38,6 +38,15 @@ export interface HazardStatus {
   takeover: boolean
   hold_requested: boolean
   last_error: string | null
+  alarm_audio: {
+    configured: boolean
+    ready: boolean
+    playing: boolean
+    asset: string | null
+    loop: boolean
+    volume: number
+    last_error: string | null
+  }
   outbox?: { pending: number; mission_api_configured: boolean; last_error: string | null }
 }
 

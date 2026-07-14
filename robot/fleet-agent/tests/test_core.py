@@ -1421,6 +1421,8 @@ class CoreTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 service.play("../outside.mp3")
+            with self.assertRaises(ValueError):
+                service.play("song.mp3", volume=101)
 
             installed = service.install("cue.ogg", b"new-audio")
             self.assertEqual(installed["asset"], {"name": "cue.ogg", "bytes": 9})

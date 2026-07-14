@@ -211,7 +211,7 @@ export class DemoMissionApi implements MissionApi {
   async visionLatest(_robotId: string) { return structuredClone(visionCapture) }
   async visionLatestImage(robotId: string) { return this.videoSample(robotId) }
   visionStreamUrl(robotId: string) { return this.videoStreamUrl(robotId) }
-  async hazardStatus(_robotId: string): Promise<HazardStatus> { return { enabled: false, state: "DISABLED", current_event_key: null, current_detection: null, confirmation_hits: 0, confirmation_window: 5, hold_started_at: null, auto_resume_remaining_s: null, takeover: false, hold_requested: false, last_error: null, outbox: { pending: 0, mission_api_configured: true, last_error: null } } }
+  async hazardStatus(_robotId: string): Promise<HazardStatus> { return { enabled: false, state: "DISABLED", current_event_key: null, current_detection: null, confirmation_hits: 0, confirmation_window: 5, hold_started_at: null, auto_resume_remaining_s: null, takeover: false, hold_requested: false, last_error: null, alarm_audio: { configured: true, ready: true, playing: false, asset: "cat-alert.mp3", loop: true, volume: 100, last_error: null }, outbox: { pending: 0, mission_api_configured: true, last_error: null } } }
   async setHazardMonitor(_robotId: string, enabled: boolean) { return { ok: true, hazards: { enabled } } }
   async hazardAction(_robotId: string, eventKey: string, action: "takeover" | "resume" | "hold", _payload: JsonObject = {}) { return { ok: true, event_key: eventKey, action } }
   eventEvidenceUrl(_eventId: string, _kind: "raw" | "annotated" | "metadata") { return this.videoStreamUrl("car_1") }

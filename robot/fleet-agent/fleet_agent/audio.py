@@ -71,12 +71,18 @@ class AudioService:
 
     def play(self, asset: str, loop: bool = False, volume: int = 100) -> dict:
         with self._lock:
+            try:
+                normalized_volume = int(volume)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("volume must be an integer from 0 to 100") from exc
+            if not 0 <= normalized_volume <= 100:
+                raise ValueError("volume must be an integer from 0 to 100")
             player = self._player_path()
             if player is None:
                 raise RuntimeError("Audio playback is disabled or ffplay is not available")
             path = self._asset_path(asset)
             self._stop_unlocked()
-            command = [player, "-nodisp", "-autoexit", "-loglevel", "error", "-volume", str(int(volume))]
+            command = [player, "-nodisp", "-autoexit", "-loglevel", "error", "-volume", str(normalized_volume)]
             if loop:
                 command.extend(["-loop", "0"])
             command.append(str(path))
@@ -93,7 +99,7 @@ class AudioService:
                 raise RuntimeError(f"Unable to start audio player: {exc}") from exc
             self._asset = path.name
             self._loop = bool(loop)
-            self._volume = int(volume)
+            self._volume = normalized_volume
             self._started_at = time.time()
             self._last_error = None
             return {"ok": True, **self._status_unlocked()}

@@ -103,4 +103,34 @@ describe("RobotDetailPage control safety", () => {
     await userEvent.click(screen.getByRole("button", { name: "上传" }))
     await waitFor(() => expect(uploadSpy).toHaveBeenCalledWith("car_1", file))
   })
+
+  it("shows the configured hazard alarm audio state", async () => {
+    vi.spyOn(DemoMissionApi.prototype, "hazardStatus").mockResolvedValue({
+      enabled: true,
+      state: "HOLDING",
+      current_event_key: "hazard-1",
+      current_detection: null,
+      confirmation_hits: 3,
+      confirmation_window: 5,
+      hold_started_at: Date.now() / 1000,
+      auto_resume_remaining_s: 8,
+      takeover: false,
+      hold_requested: false,
+      last_error: null,
+      alarm_audio: { configured: true, ready: true, playing: true, asset: "cat-alert.mp3", loop: true, volume: 100, last_error: null },
+      outbox: { pending: 0, mission_api_configured: true, last_error: null },
+    })
+    render(
+      <FeedbackProvider>
+        <MemoryRouter initialEntries={["/robots/car_1"]}>
+          <SessionProvider>
+            <Routes><Route path="/robots/:robotId" element={<RobotDetailPage />} /></Routes>
+          </SessionProvider>
+        </MemoryRouter>
+      </FeedbackProvider>,
+    )
+
+    expect(await screen.findByText("报警音乐正在播放")).toBeInTheDocument()
+    expect(screen.getByText("cat-alert.mp3 · 循环播放 · 音量 100%")).toBeInTheDocument()
+  })
 })

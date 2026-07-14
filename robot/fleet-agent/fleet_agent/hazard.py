@@ -160,6 +160,7 @@ class HazardSupervisor:
         navigation,
         command_arbiter,
         vision_capture,
+        audio,
         evidence: EvidenceStore,
         outbox: EventOutbox,
         health_provider: Callable[[], dict],
@@ -170,6 +171,7 @@ class HazardSupervisor:
         self.navigation = navigation
         self.command_arbiter = command_arbiter
         self.vision_capture = vision_capture
+        self.audio = audio
         self.evidence = evidence
         self.outbox = outbox
         self.health_provider = health_provider
@@ -185,6 +187,8 @@ class HazardSupervisor:
         self.takeover = False
         self.hold_requested = False
         self.last_error: Optional[str] = None
+        self.alarm_audio_error: Optional[str] = None
+        self._alarm_event_key: Optional[str] = None
 
     def set_enabled(self, enabled: bool) -> dict:
         with self.lock:
@@ -193,6 +197,8 @@ class HazardSupervisor:
             self.enabled = bool(enabled)
             self.state = "MONITORING" if enabled else "DISABLED"
             self.history.clear()
+            if not enabled:
+                self._stop_alarm_unlocked()
         self.vision_capture.set_monitor_enabled(enabled)
         return self.status()
 
@@ -217,7 +223,6 @@ class HazardSupervisor:
                 item for item in targets
                 if item.get("range_m") is not None
                 and float(item["range_m"]) <= self.config.stop_distance_m
-                and item.get("range_quality") == "calibrated"
             ]
             hit = bool(actionable)
             self.history.append(hit)
@@ -241,6 +246,7 @@ class HazardSupervisor:
         with self.lock:
             self._require_current_event(event_key)
             self.takeover = True
+            self._stop_alarm_unlocked()
             self.patrol.cancel("hazard_takeover", wait_timeout_s=1.0)
             self.runtime_state.set_mode(Mode.MANUAL)
             self.state = "TAKEOVER"
@@ -281,6 +287,7 @@ class HazardSupervisor:
                 "takeover": self.takeover,
                 "hold_requested": self.hold_requested,
                 "last_error": self.last_error,
+                "alarm_audio": self._alarm_audio_status_unlocked(),
                 "outbox": self.outbox.status(),
             }
 
@@ -305,6 +312,8 @@ class HazardSupervisor:
         self.takeover = False
         self.hold_requested = False
         patrol_status = self.patrol.status()
+        action_timeline = [{"action": "hazard_stop", "timestamp": now}]
+        self._play_alarm_unlocked(event_key, action_timeline)
         metadata = {
             "event_key": event_key,
             "robot_id": self.config.robot_id,
@@ -313,7 +322,7 @@ class HazardSupervisor:
             "observation": payload,
             "trigger_detection": detection,
             "patrol": patrol_status,
-            "action_timeline": [{"action": "hazard_stop", "timestamp": now}],
+            "action_timeline": action_timeline,
         }
         artifacts = self.evidence.save(
             event_key,
@@ -358,6 +367,7 @@ class HazardSupervisor:
         if patrol_status.get("state") != "paused":
             raise RuntimeError(f"Cannot resume hazard hold while patrol state={patrol_status.get('state')}")
         self.state = "AUTO_RESUMING" if reason == "target_clear_timeout" else "RESUMING"
+        self._stop_alarm_unlocked()
         self.patrol.resume()
         self.runtime_state.set_mode(Mode.NAV_PATROL)
         self.state = "MONITORING"
@@ -365,6 +375,103 @@ class HazardSupervisor:
         self.current_detection = None
         self.hold_started_at = None
         self.history.clear()
+
+    def _play_alarm_unlocked(self, event_key: str, timeline: list[dict]) -> None:
+        asset = str(self.config.alarm_audio_asset or "").strip()
+        timestamp = time.time()
+        self.alarm_audio_error = None
+        self._alarm_event_key = None
+        if not asset:
+            timeline.append({
+                "action": "hazard_alarm_skipped",
+                "timestamp": timestamp,
+                "reason": "alarm audio is not configured",
+            })
+            return
+        try:
+            self.audio.play(
+                asset,
+                loop=bool(self.config.alarm_audio_loop),
+                volume=int(self.config.alarm_audio_volume),
+            )
+            self._alarm_event_key = event_key
+            timeline.append({
+                "action": "hazard_alarm_started",
+                "timestamp": timestamp,
+                "asset": asset,
+                "loop": bool(self.config.alarm_audio_loop),
+                "volume": int(self.config.alarm_audio_volume),
+            })
+        except Exception as exc:
+            self.alarm_audio_error = str(exc)
+            timeline.append({
+                "action": "hazard_alarm_failed",
+                "timestamp": timestamp,
+                "asset": asset,
+                "error": self.alarm_audio_error,
+            })
+
+    def _stop_alarm_unlocked(self) -> None:
+        if self._alarm_event_key is None:
+            return
+        try:
+            audio_status = self.audio.status()
+            configured_asset = str(self.config.alarm_audio_asset or "").strip()
+            if not audio_status.get("playing") or audio_status.get("asset") == configured_asset:
+                self.audio.stop()
+        except Exception as exc:
+            self.alarm_audio_error = str(exc)
+            return
+        self._alarm_event_key = None
+
+    def _alarm_audio_status_unlocked(self) -> dict:
+        asset = str(self.config.alarm_audio_asset or "").strip()
+        configured = bool(asset)
+        service_status: dict[str, Any] = {}
+        asset_names: set[str] = set()
+        service_error: Optional[str] = None
+        try:
+            service_status = self.audio.status()
+            asset_names = {str(item.get("name")) for item in self.audio.assets().get("assets", [])}
+        except Exception as exc:
+            service_error = str(exc)
+
+        try:
+            volume = int(self.config.alarm_audio_volume)
+            volume_valid = 0 <= volume <= 100
+        except (TypeError, ValueError):
+            volume = 0
+            volume_valid = False
+
+        ready = bool(
+            configured
+            and volume_valid
+            and service_status.get("available")
+            and asset in asset_names
+        )
+        last_error = self.alarm_audio_error or service_status.get("last_error") or service_error
+        if configured and last_error is None:
+            if not volume_valid:
+                last_error = "Alarm audio volume must be an integer from 0 to 100"
+            elif not service_status.get("available"):
+                last_error = "Audio playback is disabled or ffplay is not available"
+            elif asset not in asset_names:
+                last_error = f"Audio asset '{asset}' was not found"
+
+        playing = bool(
+            self._alarm_event_key
+            and service_status.get("playing")
+            and service_status.get("asset") == asset
+        )
+        return {
+            "configured": configured,
+            "ready": ready,
+            "playing": playing,
+            "asset": asset or None,
+            "loop": bool(self.config.alarm_audio_loop),
+            "volume": volume,
+            "last_error": last_error,
+        }
 
     def _require_current_event(self, event_key: str) -> None:
         if self.current_event_key != event_key or self.state not in {"HOLDING", "TAKEOVER"}:

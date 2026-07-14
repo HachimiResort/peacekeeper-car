@@ -77,6 +77,10 @@ hazards:
   # Set this to the Mission API address reachable from the car before deployment.
   mission_api_url: ""
   mission_api_token: ""
+  # Upload this file through Web Console or copy it into audio.asset_dir.
+  alarm_audio_asset: cat-alert.mp3
+  alarm_audio_volume: 100
+  alarm_audio_loop: true
 
 processes:
   chassis:

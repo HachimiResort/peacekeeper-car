@@ -203,11 +203,29 @@ camera_link` transform for target map coordinates. Missing camera TF never
 blocks a confirmed stop, but the target map position is reported as unknown.
 
 Monitoring starts only after `POST /api/hazards/monitor {"enabled": true}` and
-continues without an open browser. Three confirmed calibrated measurements in
-five observations inside 1.5 m pause patrol and enter `HAZARD_HOLD`. Evidence
+continues without an open browser. Three confirmed measurements in five
+observations inside 1.5 m pause patrol and enter `HAZARD_HOLD`. Evidence
 is written under `data/evidence`, queued under `data/outbox`, and retried until
 the center accepts it. Do not use the generic patrol resume endpoint while a
 hazard hold is active.
+
+To play a custom alarm after the stop command, upload a supported `.mp3`,
+`.wav`, `.ogg`, or `.m4a` file from Web Console, or copy it into
+`/root/peacekeeper-car/data/audio`. Configure only its file name:
+
+```yaml
+hazards:
+  alarm_audio_asset: cat-alert.mp3
+  alarm_audio_volume: 100
+  alarm_audio_loop: true
+```
+
+The alarm loops while the vehicle remains in `HOLDING` and stops before patrol
+resume or operator takeover. Playback failure is reported in
+`GET /api/hazards/status` under `alarm_audio`, but never prevents the stop,
+evidence capture, or event delivery. Before a vehicle test, verify
+`command -v ffplay` and `/dev/snd` inside `pk-agent`, then use the existing Web
+Console audio controls to confirm that the selected speaker produces sound.
 
 ## Verification Without Hardware
 

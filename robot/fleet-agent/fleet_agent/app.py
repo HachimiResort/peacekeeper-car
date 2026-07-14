@@ -121,6 +121,7 @@ def create_app(config: AgentConfig) -> FastAPI:
         navigation,
         cmd_vel,
         vision_capture,
+        audio,
         evidence_store,
         event_outbox,
         vision_capture.status,
