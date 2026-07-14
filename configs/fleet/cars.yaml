@@ -3,7 +3,7 @@ robots:
     name: Peacekeeper Car 1
     base_url: http://10.60.162.192:8001
     role: leader
-    enabled: false
+    enabled: true
     capabilities:
       mapping: true
       navigation: true
