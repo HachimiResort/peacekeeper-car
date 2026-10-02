@@ -1,3 +1,5 @@
+> 本项目为北京交通大学软件学院 2026 小学期实训留档
+
 # Peacekeeper Car
 
 Peacekeeper 是巡逻智能车项目的车端软件仓库。
